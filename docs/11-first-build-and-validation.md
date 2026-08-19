@@ -551,7 +551,99 @@ can cause a downgrade. Moving them is an API-surface change on code that has sti
 compiled, and mixing that into the first real build would make the resulting error list
 ambiguous. Both are worth revisiting the moment CI is green.
 
-## 9. What the next run will exercise for the first time
+## 9. Fourth run — restore passed, and the compiler finally spoke
+
+**Restore succeeded.** `code-style` is green, `validate-infrastructure` is green, and
+`dotnet build` ran against this code for the first time since it was written. The 10.0.11 band
+alignment held.
+
+Four analyzer errors, `0 Warning(s), 4 Error(s)`, all in `FcTelecom.Domain`.
+
+### CA1305 — `int.ToString()` without a format provider
+
+`NoticeDeadlineCalculator.cs:115`, formatting `RenewalTermMonths` into a renewal message.
+Fixed with `CultureInfo.InvariantCulture`. Not just to satisfy the rule: these assessment
+strings are asserted on directly by the calculator's unit tests, and a month count that
+formats differently on a differently-configured runner would fail those tests for a reason
+that has nothing to do with renewal logic.
+
+### CA1859 — interface return type on a private method
+
+`NotificationAudienceResolver.Split` returned `IEnumerable<string>` where it always returns an
+array. Changed to `string[]`. Both call sites `foreach` over it, so nothing else moves.
+
+### CA1036 — `Money` implements `IComparable<Money>` with no ordering operators
+
+The rule is right, and this one was a latent bug rather than a style point. A type you can
+`CompareTo` but not write `a < b` against is a trap. Added `<`, `<=`, `>`, `>=`, each routed
+through `CompareTo` so all four inherit the mixed-currency guard rather than comparing USD to
+CAD by amount alone.
+
+Equality is left to the compiler — `readonly record struct` already generates `==`, `!=`,
+`Equals` and `GetHashCode` over both `Amount` and `CurrencyCode`. That leaves a deliberate
+asymmetry worth knowing about: `usd10 == cad10` is **false**, while `usd10 < cad10` **throws**.
+Equality is a question that can always be answered; ordering across currencies is not.
+
+### CA1711 — `RolePermission` ends in a reserved suffix
+
+CA1711 reserves the `Permission` suffix for types descended from the old Code Access Security
+hierarchy. `RolePermission` is not one of those, so the rule is firing on a legacy .NET
+Framework concern.
+
+The tempting fix is `dotnet_code_quality.CA1711.allowed_suffixes = Permission`. **Renamed
+instead**, to `RolePermissionGrant` — because the same file already contains
+`UserPermissionGrant` (a permission granted to one person, as opposed to one granted to a
+role), so the rename makes the two halves of the permission model read the same way. It is a
+better name that happens to also satisfy the analyzer, which beats a suppression that a future
+maintainer has to evaluate.
+
+Seven files, all type references. **The table is still `RolePermissions`** — it is set
+explicitly with `ToTable("RolePermissions")` — and the `DbSet` property is still
+`RolePermissions`. No schema change, no migration.
+
+### The structural problem: one project's errors per CI round trip
+
+The solution builds in dependency order. Domain failed analysis, so **Application,
+Infrastructure, Web and both test projects were never compiled and never analysed**. Their
+diagnostics stay invisible until Domain is clean. Fixing four errors to discover the next
+project's four is the same one-defect-per-round-trip pattern that made the restore failures
+take three runs.
+
+`build-and-test` now has a **"Survey every remaining diagnostic"** step. It runs only when the
+gating build has already failed, rebuilds with `-p:TreatWarningsAsErrors=false` and
+`--no-incremental` so every project compiles and reports, and writes the deduplicated findings
+to the job summary and an artifact. One run, the whole picture.
+
+To be explicit, because it resembles the thing that was ruled out: the committed
+`TreatWarningsAsErrors` in `Directory.Build.props` is untouched and still `true`, the gating
+Build step above it is unchanged and still fails the job, and the override exists only on this
+diagnostic step's command line where it gates nothing.
+
+A local approximation of the same four rules was run across every project first. It produced
+nine further candidates, **all of which are false positives** on inspection: `IPAddress` and
+`Enum` are not `IFormattable` so CA1305 does not apply to them; `DiversityAnalyzer
+.InferSharedVendor` is a `yield return` iterator so CA1859 does not apply; `Notification.cs`
+and `NoticeDeadlineCalculatorTests.cs` already pass a provider; and the two `*Exception` types
+do derive from `Exception`, which is what CA1711 wants. The survey step exists because that
+approximation is not a compiler and should not be trusted to be complete.
+
+### Dependabot paused
+
+Adding `dependabot.yml` while `main` had never restored was badly sequenced on my part. It
+immediately opened six pull requests, each running full CI against a tree that did not build,
+producing six red runs that said nothing about the six proposed upgrades — they simply
+inherited `main`'s failure. An upgrade bot needs a green baseline to compare against; without
+one it emits noise.
+
+`open-pull-requests-limit: 0` on both ecosystems disables version-update PRs while leaving the
+config and the grouping intact. **Security advisories still open PRs** — the one category worth
+interrupting for. Set the nuget limit back to 5 and the actions limit back to the default once
+main is green. Close PRs #1–#6; they carry no information.
+
+Also added the `semver-major` ignore to the github-actions ecosystem, which was missing it —
+that omission is why the first batch proposed `actions/setup-dotnet` v5 → v6.
+
+## 10. What the next run will exercise for the first time
 
 Restore was the only gate reached so far. Passing it means **`dotnet build` runs against this
 code for the first time ever** — that is where any remaining compile errors will surface, and

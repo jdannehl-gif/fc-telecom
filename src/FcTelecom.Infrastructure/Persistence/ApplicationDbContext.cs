@@ -68,7 +68,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
     // Platform
     public DbSet<AppUser> Users => Set<AppUser>();
     public DbSet<AppRole> Roles => Set<AppRole>();
-    public DbSet<RolePermission> RolePermissions => Set<RolePermission>();
+    public DbSet<RolePermissionGrant> RolePermissions => Set<RolePermissionGrant>();
     public DbSet<RoleAssignment> RoleAssignments => Set<RoleAssignment>();
     public DbSet<UserPermissionGrant> UserPermissionGrants => Set<UserPermissionGrant>();
     public DbSet<EntraGroupRoleMap> EntraGroupRoleMaps => Set<EntraGroupRoleMap>();

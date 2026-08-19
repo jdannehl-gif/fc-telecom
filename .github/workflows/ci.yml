@@ -59,6 +59,74 @@ jobs:
         # read is the same as no warning at all.
         run: dotnet build --no-restore --configuration Release
 
+      - name: Survey every remaining diagnostic
+        # Runs ONLY when the gating build above failed, and never gates anything itself.
+        #
+        # The problem it solves: the solution builds in dependency order, so when Domain fails
+        # analysis, Application, Infrastructure, Web and the test projects are never compiled
+        # and never analysed. Their diagnostics stay invisible until Domain is clean, which
+        # turns "fix the analyzer findings" into one CI round trip per project.
+        #
+        # This step rebuilds with -p:TreatWarningsAsErrors=false so every project compiles and
+        # reports, then prints the full deduplicated list. One run, the whole picture.
+        #
+        # To be explicit, because it looks like the thing we were told not to do: the committed
+        # TreatWarningsAsErrors in Directory.Build.props is untouched and still true, and the
+        # gating Build step above still fails the job. The override lives only in this
+        # diagnostic step's command line and gates nothing.
+        #
+        # --no-incremental because the failed build left partial outputs; without it MSBuild
+        # can consider a project up to date and skip re-running its analyzers.
+        if: failure()
+        continue-on-error: true
+        run: |
+          dotnet build --no-restore --no-incremental --configuration Release \
+            -p:TreatWarningsAsErrors=false \
+            > survey.txt 2>&1 || true
+
+          echo "### Analyzer diagnostics across the whole solution" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # MSBuild prints each diagnostic inline and again in the summary; dedupe on the
+          # file:line:code triple so the count reflects distinct findings.
+          grep -oE '[^ ]+\.(cs|razor)\([0-9]+,[0-9]+\): (warning|error) [A-Z]+[0-9]+: .*' survey.txt \
+            | sed 's| \[/home/runner/work.*||' \
+            | sort -u > findings.txt || true
+
+          if [ ! -s findings.txt ]; then
+            echo "No analyzer diagnostics found. The gating build failed for another reason —" >> "$GITHUB_STEP_SUMMARY"
+            echo "read the Build step log directly." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "**$(wc -l < findings.txt) distinct diagnostic(s).** By rule:" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          grep -oE '(warning|error) [A-Z]+[0-9]+' findings.txt \
+            | awk '{print $2}' | sort | uniq -c | sort -rn >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "<details><summary>All findings</summary>" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat findings.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "</details>" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "=== Distinct diagnostics ==="
+          cat findings.txt
+
+      - name: Upload diagnostic survey
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: analyzer-survey
+          path: |
+            survey.txt
+            findings.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Run tests
         # No ConnectionStrings__Default here: no current test project touches a database.
         # Restore it alongside the SQL service container when integration tests land — a

@@ -1,3 +1,4 @@
+using System.Globalization;
 using FcTelecom.Domain.Contracts;
 
 namespace FcTelecom.Domain.Calculations;
@@ -112,7 +113,12 @@ public static class NoticeDeadlineCalculator
             string consequence = contract.RenewalType switch
             {
                 RenewalType.AutoRenew =>
-                    $"The contract has likely auto-renewed for a further {contract.RenewalTermMonths?.ToString() ?? "unknown"} months.",
+                    // InvariantCulture, not the ambient culture: these assessment strings are
+                    // asserted on directly by the calculator's unit tests, and a month count
+                    // that formats differently on a differently-configured CI runner would
+                    // make those tests fail for a reason that has nothing to do with the
+                    // renewal logic (CA1305).
+                    $"The contract has likely auto-renewed for a further {contract.RenewalTermMonths?.ToString(CultureInfo.InvariantCulture) ?? "unknown"} months.",
                 RenewalType.EvergreenMonthToMonth =>
                     "The contract has moved to month-to-month; cancellation is likely still possible on shorter notice.",
                 RenewalType.None =>

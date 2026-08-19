@@ -33,11 +33,25 @@ public class AppRole
     /// <summary>System roles cannot be deleted, only have their permissions adjusted.</summary>
     public bool IsSystemRole { get; set; }
 
-    public ICollection<RolePermission> Permissions { get; set; } = [];
+    public ICollection<RolePermissionGrant> Permissions { get; set; } = [];
     public ICollection<EntraGroupRoleMap> GroupMappings { get; set; } = [];
 }
 
-public class RolePermission
+/// <summary>
+/// A permission granted to a role — the counterpart of <see cref="UserPermissionGrant"/>,
+/// which grants one to a single person.
+/// </summary>
+/// <remarks>
+/// Named <c>RolePermissionGrant</c> rather than <c>RolePermission</c> for two reasons. It
+/// pairs with <see cref="UserPermissionGrant"/>, so the two halves of the permission model
+/// read the same way. And CA1711 reserves the <c>Permission</c> suffix for types deriving
+/// from the old Code Access Security hierarchy, which this is not.
+/// <para>
+/// The table is still <c>RolePermissions</c> and the <c>DbSet</c> is still
+/// <c>RolePermissions</c> — this is a type name, not a schema change.
+/// </para>
+/// </remarks>
+public class RolePermissionGrant
 {
     public int RoleId { get; set; }
     public AppRole Role { get; set; } = null!;

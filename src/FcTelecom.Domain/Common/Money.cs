@@ -54,6 +54,24 @@ public readonly record struct Money(decimal Amount, string CurrencyCode) : IComp
         return Amount.CompareTo(other.Amount);
     }
 
+    // A type that implements IComparable<T> but has no ordering operators is a trap: the
+    // comparison a reader reaches for first is `a < b`, and without these that either fails
+    // to compile or silently falls back to something else. Each one goes through CompareTo,
+    // so all four inherit the mixed-currency guard rather than quietly comparing USD to CAD
+    // by amount alone (CA1036).
+    //
+    // Equality is not defined here — `readonly record struct` already generates ==, !=,
+    // Equals and GetHashCode over both Amount and CurrencyCode. Note the asymmetry that
+    // follows: `usd10 == cad10` is false, while `usd10 < cad10` throws. That is deliberate.
+    // Equality is a question you can always answer; ordering across currencies is not.
+    public static bool operator <(Money left, Money right) => left.CompareTo(right) < 0;
+
+    public static bool operator <=(Money left, Money right) => left.CompareTo(right) <= 0;
+
+    public static bool operator >(Money left, Money right) => left.CompareTo(right) > 0;
+
+    public static bool operator >=(Money left, Money right) => left.CompareTo(right) >= 0;
+
     /// <summary>
     /// Sums a sequence, returning zero in <paramref name="fallbackCurrency"/> when empty.
     /// Throws if the sequence mixes currencies.

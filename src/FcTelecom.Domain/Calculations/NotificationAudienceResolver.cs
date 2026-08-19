@@ -241,7 +241,10 @@ public static class NotificationAudienceResolver
         warnings.Add($"The {source} names the {role} role, but nobody currently holds it.");
     }
 
-    private static IEnumerable<string> Split(string? value) =>
+    // string[] rather than IEnumerable<string>: this is private, every caller enumerates it
+    // once, and returning the interface only adds an abstraction the JIT then has to see
+    // through (CA1859).
+    private static string[] Split(string? value) =>
         string.IsNullOrWhiteSpace(value)
             ? []
             : value.Split([';', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);

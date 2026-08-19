@@ -54,9 +54,9 @@ public sealed class AppRoleConfiguration : IEntityTypeConfiguration<AppRole>
     }
 }
 
-public sealed class RolePermissionConfiguration : IEntityTypeConfiguration<RolePermission>
+public sealed class RolePermissionConfiguration : IEntityTypeConfiguration<RolePermissionGrant>
 {
-    public void Configure(EntityTypeBuilder<RolePermission> builder)
+    public void Configure(EntityTypeBuilder<RolePermissionGrant> builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
 

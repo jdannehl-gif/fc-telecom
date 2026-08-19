@@ -80,7 +80,7 @@ public interface IApplicationDbContext
     // Platform
     DbSet<AppUser> Users { get; }
     DbSet<AppRole> Roles { get; }
-    DbSet<RolePermission> RolePermissions { get; }
+    DbSet<RolePermissionGrant> RolePermissions { get; }
     DbSet<RoleAssignment> RoleAssignments { get; }
     DbSet<UserPermissionGrant> UserPermissionGrants { get; }
     DbSet<EntraGroupRoleMap> EntraGroupRoleMaps { get; }

@@ -11,6 +11,22 @@ version: 2
 # EF Core, the Extensions primitives, ASP.NET Core components and the framework security pins
 # all constrain each other, so eleven separate PRs would each be individually un-mergeable.
 # One grouped PR per band is reviewable and restores cleanly.
+#
+# ── PAUSED ──────────────────────────────────────────────────────────────────────────────
+#
+# `open-pull-requests-limit: 0` disables version-update pull requests while leaving the
+# configuration and the grouping in place. GitHub *security* advisories still open PRs; that
+# is the one category worth interrupting for.
+#
+# Why: this file was added while main had never once restored successfully, and it immediately
+# opened six pull requests. Every one ran full CI against a tree that does not build, so six
+# red runs appeared that said nothing about the six proposed upgrades — they inherited main's
+# failure. Adding an upgrade bot to an unstable pipeline produces noise, not signal, because
+# there is no green baseline to compare a proposed change against.
+#
+# Set the nuget limit back to 5 and the actions limit back to the default the day restore,
+# build, tests, and the security scan all pass on main. That is the point at which a red
+# Dependabot PR means "this upgrade breaks us", which is the whole reason to have it.
 
 updates:
   - package-ecosystem: nuget
@@ -19,7 +35,8 @@ updates:
     schedule:
       interval: weekly
       day: monday
-    open-pull-requests-limit: 5
+    # Restore to 5 once main is green. See the PAUSED note above.
+    open-pull-requests-limit: 0
     groups:
       # The whole .NET 10 band, moved together. This is the group that would have caught
       # the 10.0.0 → 10.0.11 gap.
@@ -63,7 +80,16 @@ updates:
     directory: "/"
     schedule:
       interval: monthly
+    # Also paused. Restore to the default (5) alongside the nuget limit above.
+    open-pull-requests-limit: 0
     groups:
       actions:
         patterns:
           - "*"
+    ignore:
+      # The nuget block below has the same rule; this one was missing it, which is why the
+      # first Dependabot batch proposed actions/setup-dotnet v5 → v6. A major action bump can
+      # change the runtime it executes on and how it reads global.json — worth taking, but as
+      # a deliberate change with a run behind it, not as an automatic Monday PR.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]

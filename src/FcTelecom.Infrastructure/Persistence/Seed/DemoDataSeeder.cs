@@ -990,7 +990,7 @@ public sealed class DemoDataSeeder(
             }
 
             db.RolePermissions.AddRange(permissions.Select(permission =>
-                new RolePermission { RoleId = roleId, Permission = permission }));
+                new RolePermissionGrant { RoleId = roleId, Permission = permission }));
         }
     }
 
