@@ -1,0 +1,53 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+indent_style = space
+indent_size = 4
+trim_trailing_whitespace = true
+
+[*.{json,yml,yaml,csproj,props,targets,bicep,bicepparam}]
+indent_size = 2
+
+[*.{razor,cshtml}]
+indent_size = 4
+
+[*.md]
+trim_trailing_whitespace = false
+
+[*.cs]
+# Usings
+dotnet_sort_system_directives_first = true
+dotnet_separate_import_directive_groups = false
+csharp_using_directive_placement = outside_namespace:warning
+
+# Modern C# style
+csharp_style_namespace_declarations = file_scoped:error
+csharp_style_var_for_built_in_types = false:suggestion
+csharp_style_var_when_type_is_apparent = true:suggestion
+csharp_prefer_braces = true:warning
+csharp_style_prefer_primary_constructors = true:suggestion
+csharp_style_expression_bodied_methods = when_on_single_line:suggestion
+
+# Correctness rules we care enough about to fail the build on
+dotnet_diagnostic.CA2007.severity = none          # No SynchronizationContext in ASP.NET Core
+dotnet_diagnostic.CA1848.severity = none          # LoggerMessage source-gen: not worth it everywhere
+dotnet_diagnostic.CA1062.severity = none          # Nullable reference types cover this
+dotnet_diagnostic.CA2100.severity = error         # SQL injection review
+dotnet_diagnostic.CA5350.severity = error         # Weak crypto
+dotnet_diagnostic.CA5351.severity = error         # Broken crypto
+dotnet_diagnostic.CA3001.severity = error         # SQL injection
+dotnet_diagnostic.CA3003.severity = error         # File path injection
+dotnet_diagnostic.CA3075.severity = error         # Insecure DTD processing
+dotnet_diagnostic.IDE0055.severity = suggestion   # Formatting: advisory, not a build break
+
+# Naming
+dotnet_naming_rule.private_fields_underscore.severity = warning
+dotnet_naming_rule.private_fields_underscore.symbols = private_fields
+dotnet_naming_rule.private_fields_underscore.style = underscore_camel_case
+dotnet_naming_symbols.private_fields.applicable_kinds = field
+dotnet_naming_symbols.private_fields.applicable_accessibilities = private
+dotnet_naming_style.underscore_camel_case.required_prefix = _
+dotnet_naming_style.underscore_camel_case.capitalization = camel_case

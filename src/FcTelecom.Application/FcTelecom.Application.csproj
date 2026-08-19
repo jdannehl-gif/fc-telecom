@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Application references Domain and nothing else from this solution. In particular it
+    does NOT reference Infrastructure — it declares interfaces that Infrastructure
+    implements, and FcTelecom.Architecture.Tests fails the build if that inverts.
+
+    Microsoft.EntityFrameworkCore is referenced (not the SqlServer provider) purely so
+    query handlers can express IQueryable projections and call the async LINQ operators.
+    That is a pragmatic exception to a pure-abstractions rule: hand-rolling a repository
+    interface wide enough to express these queries produces an abstraction that is worse
+    than the thing it hides.
+  -->
+
+  <PropertyGroup>
+    <RootNamespace>FcTelecom.Application</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FcTelecom.Domain\FcTelecom.Domain.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore" />
+    <PackageReference Include="FluentValidation" />
+    <PackageReference Include="FluentValidation.DependencyInjectionExtensions" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
+  </ItemGroup>
+
+</Project>

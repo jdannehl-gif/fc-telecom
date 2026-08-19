@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>FcTelecom.Architecture.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\FcTelecom.Domain\FcTelecom.Domain.csproj" />
+    <ProjectReference Include="..\..\src\FcTelecom.Application\FcTelecom.Application.csproj" />
+    <ProjectReference Include="..\..\src\FcTelecom.Infrastructure\FcTelecom.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\FcTelecom.Web\FcTelecom.Web.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="Shouldly" />
+    <PackageReference Include="NetArchTest.Rules" />
+  </ItemGroup>
+
+</Project>

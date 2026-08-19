@@ -1,34 +1,32 @@
-using FcTelecom.Application.Dashboard;
-using FcTelecom.Application.Organization;
-using FcTelecom.Application.Platform;
-using FcTelecom.Application.Services;
-using FcTelecom.Application.Vendors;
-using Microsoft.Extensions.DependencyInjection;
+<Project>
 
-namespace FcTelecom.Application;
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
 
-public static class DependencyInjection
-{
-    /// <summary>
-    /// Registers the application's query and command services.
-    /// </summary>
-    /// <remarks>
-    /// Scoped, because each one holds a reference to the request-scoped
-    /// <c>IApplicationDbContext</c> and <c>ICurrentUser</c>. Registering any of these as
-    /// singletons would capture the first request's identity and serve it to everyone —
-    /// a class of bug that is subtle to spot and catastrophic in an application with
-    /// permission-scoped queries.
-    /// </remarks>
-    public static IServiceCollection AddApplication(this IServiceCollection services)
-    {
-        ArgumentNullException.ThrowIfNull(services);
+  <!--
+    CS1591 (missing XML comment) is off because we do not require doc comments on
+    internal application code. Everything else stays an error on purpose: this
+    codebase will be maintained by a small team over several years, and a warning
+    nobody has time to read is the same as no warning at all.
+  -->
+  <PropertyGroup>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
 
-        services.AddScoped<LocationQueries>();
-        services.AddScoped<VendorQueries>();
-        services.AddScoped<TelecomServiceQueries>();
-        services.AddScoped<DashboardQueries>();
-        services.AddScoped<GlobalSearchService>();
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <DebugType>portable</DebugType>
+    <Optimize>true</Optimize>
+  </PropertyGroup>
 
-        return services;
-    }
-}
+</Project>
