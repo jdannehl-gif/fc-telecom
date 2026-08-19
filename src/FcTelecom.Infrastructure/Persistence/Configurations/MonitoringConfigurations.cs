@@ -21,6 +21,13 @@ public sealed class ServiceMonitorConfiguration : IEntityTypeConfiguration<Servi
         builder.Property(monitor => monitor.ExpectedContent).HasMaxLength(500);
         builder.Property(monitor => monitor.DnsQueryName).HasMaxLength(300);
 
+        // Convenience projections over TargetKind. Without these, EF maps them by
+        // convention and the same fact ends up in three columns that can disagree.
+        builder.Ignore(monitor => monitor.IsInternalTarget);
+        builder.Ignore(monitor => monitor.HasWeakInternalTarget);
+        builder.Ignore(monitor => monitor.StalenessTolerance);
+        builder.Ignore(monitor => monitor.HasReducedConfidence);
+
         builder.HasOne(monitor => monitor.Service)
             .WithMany(service => service.Monitors)
             .HasForeignKey(monitor => monitor.ServiceId)

@@ -10,6 +10,43 @@ namespace FcTelecom.Domain.Monitoring;
 
 public enum CheckType { Icmp = 1, Tcp = 2, Http = 3, Https = 4, Dns = 5 }
 
+public enum MonitorTargetKind
+{
+    /// <summary>A circuit's public IP or other external endpoint, watched from Azure.</summary>
+    PublicCircuitEndpoint = 1,
+
+    /// <summary>An always-on device inside the location, watched from a self-hosted agent.</summary>
+    InternalLocationTarget = 2,
+}
+
+/// <summary>
+/// What the internal target actually is. Ordered by how much a failure tells you.
+/// </summary>
+public enum InternalTargetKind
+{
+    /// <summary>Branch firewall LAN or management address. The preferred target.</summary>
+    FirewallLanOrManagement = 1,
+
+    /// <summary>The location's management VLAN gateway. Equally preferred.</summary>
+    ManagementVlanGateway = 2,
+
+    /// <summary>A core or distribution switch. Acceptable.</summary>
+    CoreSwitch = 3,
+
+    /// <summary>
+    /// Anything else — a server, an AP controller. Usable, but the monitor is flagged as
+    /// lower confidence because availability now depends on that device's own lifecycle.
+    /// </summary>
+    Other = 98,
+
+    /// <summary>
+    /// A workstation or printer. <b>Explicitly not a supported default.</b> Present so that
+    /// an existing bad choice can be recorded and reported as a data-quality finding rather
+    /// than silently trusted.
+    /// </summary>
+    NotSuitable = 99,
+}
+
 public enum DnsRecordType { A = 1, Aaaa = 2, Cname = 3, Mx = 4, Txt = 5 }
 
 /// <summary>
@@ -81,11 +118,58 @@ public class ServiceMonitor : AuditableEntity
     public int RequiredProbeQuorum { get; set; } = 2;
 
     /// <summary>
+    /// What this monitor is actually watching. Drives how a failure is interpreted.
+    /// </summary>
+    /// <remarks>
+    /// Circuit reachability and internal location reachability answer different questions
+    /// and fail for different reasons, so they are distinguished at the schema level rather
+    /// than inferred. A public circuit endpoint going quiet is a transport question; an
+    /// internal target going quiet while the circuits answer is a site, CPE, or VPN question.
+    /// </remarks>
+    public MonitorTargetKind TargetKind { get; set; } = MonitorTargetKind.PublicCircuitEndpoint;
+
+    /// <summary>
+    /// What kind of internal device this is, when <see cref="TargetKind"/> is
+    /// <see cref="MonitorTargetKind.InternalLocationTarget"/>.
+    /// </summary>
+    /// <remarks>
+    /// Recorded because the choice of internal target determines what a failure means.
+    /// A firewall LAN or management address going quiet is a real signal; a workstation
+    /// going quiet means somebody went home. Non-preferred targets are reported so the
+    /// coverage figures can be read with the right amount of scepticism.
+    /// </remarks>
+    // Named ...DeviceKind rather than ...Kind so the property does not shadow its own enum
+    // type inside this class — legal C#, but it turns every reference to a member of the
+    // enum into a puzzle.
+    public InternalTargetKind? InternalTargetDeviceKind { get; set; }
+
+    /// <summary>
     /// True for a target behind your firewall. Internal targets are what let the engine
     /// tell a CPE failure apart from a transport failure — the carrier's edge answering
     /// while everything behind it is dark is the classic blind spot of monitoring a public IP.
     /// </summary>
-    public bool IsInternalTarget { get; set; }
+    /// <remarks>
+    /// A convenience projection over <see cref="TargetKind"/>, not a stored column. The
+    /// entity configuration ignores it explicitly — a read/write property with no backing
+    /// field would otherwise be mapped by convention and duplicate the same fact in two
+    /// columns that can disagree.
+    /// </remarks>
+    public bool IsInternalTarget
+    {
+        get => TargetKind == MonitorTargetKind.InternalLocationTarget;
+        set => TargetKind = value
+            ? MonitorTargetKind.InternalLocationTarget
+            : MonitorTargetKind.PublicCircuitEndpoint;
+    }
+
+    /// <summary>
+    /// True when this monitor's internal target is not one of the preferred device kinds.
+    /// Feeds the data-completeness report rather than blocking anything.
+    /// </summary>
+    public bool HasWeakInternalTarget =>
+        TargetKind == MonitorTargetKind.InternalLocationTarget &&
+        InternalTargetDeviceKind is null or Monitoring.InternalTargetKind.Other
+            or Monitoring.InternalTargetKind.NotSuitable;
 
     public bool Enabled { get; set; } = true;
 
@@ -127,6 +211,19 @@ public enum ProbeKind
 
 public enum ProbeStatus { Healthy = 1, Degraded = 2, Offline = 3, Disabled = 4 }
 
+/// <summary>
+/// How a self-hosted agent is hosted. The agent is one cross-platform .NET Worker; only
+/// the hosting wrapper differs.
+/// </summary>
+public enum AgentHostKind
+{
+    /// <summary>The initially documented and supported deployment.</summary>
+    WindowsService = 1,
+
+    SystemdUnit = 2,
+    Container = 3,
+}
+
 /// <summary>A vantage point that executes checks and reports results.</summary>
 public class Probe : AuditableEntity
 {
@@ -150,6 +247,30 @@ public class Probe : AuditableEntity
     public DateTime? LastHeartbeatUtc { get; set; }
     public string? AgentVersion { get; set; }
     public ProbeStatus Status { get; set; } = ProbeStatus.Healthy;
+
+    /// <summary>
+    /// What this probe shares its fate with — power feed, virtualization cluster, upstream
+    /// circuit. Free text, e.g. "Dorchester DC / cluster-A / feed-1".
+    /// </summary>
+    /// <remarks>
+    /// Two probes are only two perspectives if they can fail independently. Two agents on
+    /// the same hypervisor cluster, behind the same UPS, or riding the same upstream circuit
+    /// are one perspective wearing two hats — and the quorum rule will happily count them
+    /// twice and declare a confident outage that is really a power event.
+    /// <para>
+    /// Recorded rather than enforced: the admin UI warns when every probe assigned to a
+    /// monitor shares a failure domain, and the availability rollup notes it. Encoding it
+    /// as a hard constraint would be wrong, because sometimes one perspective is all there is.
+    /// </para>
+    /// </remarks>
+    public string? FailureDomain { get; set; }
+
+    /// <summary>
+    /// Deployment shape, for the onboarding runbook and version reporting.
+    /// Windows Service is the initially supported method; the agent itself is a
+    /// cross-platform .NET Worker, so systemd and container remain available.
+    /// </summary>
+    public AgentHostKind? HostKind { get; set; }
 
     public ICollection<MonitorProbeAssignment> MonitorAssignments { get; set; } = [];
 

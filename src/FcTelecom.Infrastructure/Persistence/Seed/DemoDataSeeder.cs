@@ -275,6 +275,35 @@ public sealed class DemoDataSeeder(
             new LocationContact { LocationId = northgate.Id, ContactId = okafor.Id, RoleAtLocation = "Site manager", IsPrimary = true },
             new LocationContact { LocationId = columbus.Id, ContactId = whitfield.Id, RoleAtLocation = "Site manager", IsPrimary = true });
 
+        // External identifiers, seeded for most locations but deliberately not all.
+        //
+        // Northgate, the remote office, and the Springfield satellite have no Agris code —
+        // a leased clinic suite, a satellite office, and a facility that predates the
+        // current master. That is the normal case, not an error, and it is exactly why
+        // LocationCode is the permanent enterprise key and the Agris value hangs off it
+        // rather than being it.
+        foreach ((Location site, string agrisCode) in new[]
+        {
+            (riverside, "AG-1187"),
+            (columbus, "AG-3301"),
+            (hq, "AG-0001"),
+            (atlanta, "AG-4455"),
+            (charlotte, "AG-4462"),
+            (boston, "AG-5510"),
+            (newark, "AG-5512"),
+            (denver, "AG-6620"),
+            (phoenix, "AG-6644"),
+        })
+        {
+            db.LocationExternalIdentifiers.Add(new LocationExternalIdentifier
+            {
+                LocationId = site.Id,
+                SystemKey = ExternalLocationSystems.Agris,
+                Value = agrisCode,
+                Notes = "Seeded from the initial business-location list.",
+            });
+        }
+
         VendorAccount lumenAccount = Account(lumen.Id, "8-2K4H91", "402-11940", "Enterprise fibre — Midwest");
         VendorAccount spectrumAccount = Account(spectrum.Id, "8245-1190-0034", null, "Business internet — national");
         VendorAccount attAccount = Account(att.Id, "831-000-4471-005", "BAN 831-000-4471", "MPLS and voice");
@@ -762,6 +791,10 @@ public sealed class DemoDataSeeder(
     private async Task SeedMonitoringAsync(
         SeedContext context, List<TelecomService> services, CancellationToken cancellationToken)
     {
+        // Three perspectives: one cloud, two self-hosted in deliberately different failure
+        // domains. Two agents are only two perspectives if they can fail independently —
+        // same cluster, same UPS, or same upstream circuit makes them one perspective
+        // wearing two hats, and the quorum rule would count it twice.
         var azureProbe = new Probe
         {
             Name = "Azure — East US 2",
@@ -769,22 +802,25 @@ public sealed class DemoDataSeeder(
             Status = ProbeStatus.Healthy,
             LastHeartbeatUtc = clock.UtcNow.AddMinutes(-1),
             AgentVersion = "1.0.0",
+            FailureDomain = "Azure / eastus2",
         };
 
-        var dcAgent = new Probe
+        var primaryAgent = new Probe
         {
-            Name = "Agent — Chicago DC",
+            Name = "Agent — Dorchester DC",
             Kind = ProbeKind.SelfHostedAgent,
             LocationId = context.Locations[3].Id,
             Status = ProbeStatus.Healthy,
             LastHeartbeatUtc = clock.UtcNow.AddSeconds(-40),
             AgentVersion = "1.0.0",
-            HmacKeyVaultSecretName = "probe-hmac-chicago-dc",
+            HostKind = AgentHostKind.WindowsService,
+            HmacKeyVaultSecretName = "probe-hmac-dorchester-dc",
+            FailureDomain = "Dorchester DC / cluster-A / feed-1",
         };
 
         // Offline on purpose. Its monitors go Unknown, not Down — which is the behaviour
         // the whole monitoring design is built around, and it should be visible on day one.
-        var columbusAgent = new Probe
+        var secondaryAgent = new Probe
         {
             Name = "Agent — Columbus DC",
             Kind = ProbeKind.SelfHostedAgent,
@@ -792,10 +828,12 @@ public sealed class DemoDataSeeder(
             Status = ProbeStatus.Offline,
             LastHeartbeatUtc = clock.UtcNow.AddHours(-9),
             AgentVersion = "1.0.0",
+            HostKind = AgentHostKind.WindowsService,
             HmacKeyVaultSecretName = "probe-hmac-columbus-dc",
+            FailureDomain = "Columbus DC / cluster-B / feed-2",
         };
 
-        db.Probes.AddRange(azureProbe, dcAgent, columbusAgent);
+        db.Probes.AddRange(azureProbe, primaryAgent, secondaryAgent);
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
         var monitors = new List<ServiceMonitor>();
@@ -810,6 +848,7 @@ public sealed class DemoDataSeeder(
                 ServiceId = service.Id,
                 LocationId = service.LocationId,
                 Name = $"{service.CircuitId} — public edge",
+                TargetKind = MonitorTargetKind.PublicCircuitEndpoint,
                 CheckType = CheckType.Icmp,
                 Target = "203.0.113.1",
                 IntervalSeconds = 60,
@@ -824,20 +863,63 @@ public sealed class DemoDataSeeder(
             });
         }
 
+        // One internal always-on target per location, watched from an agent. The preferred
+        // target is the branch firewall's LAN/management address — never a workstation or
+        // printer, whose availability tracks somebody's working hours rather than the site's.
+        //
+        // Two locations are deliberately left without one, so the "no internal target"
+        // coverage gap has something to report on day one. A site monitored only from the
+        // outside can have every circuit answering while everything behind the firewall is
+        // dark, and the reports must say so rather than imply we looked.
+        var withoutInternalTarget = new[] { context.Locations[9].Id, context.Locations[11].Id };
+
+        foreach (Location site in context.Locations)
+        {
+            if (withoutInternalTarget.Contains(site.Id))
+            {
+                continue;
+            }
+
+            monitors.Add(new ServiceMonitor
+            {
+                ServiceId = null,
+                LocationId = site.Id,
+                Name = $"{site.LocationCode} — internal reachability",
+                TargetKind = MonitorTargetKind.InternalLocationTarget,
+                InternalTargetDeviceKind = InternalTargetKind.FirewallLanOrManagement,
+                CheckType = CheckType.Icmp,
+                Target = "10.0.0.1",
+                IntervalSeconds = 60,
+                TimeoutMs = 5_000,
+                FailureThreshold = 3,
+                SuccessThreshold = 2,
+                // One agent can see an internal target; Azure cannot reach it at all, so
+                // requiring two would make every internal monitor permanently Unknown.
+                RequiredProbeQuorum = 1,
+                Enabled = true,
+                CurrentState = MonitorState.Up,
+                LastCheckedUtc = clock.UtcNow.AddSeconds(-25),
+                StateChangedUtc = clock.UtcNow.AddDays(-30),
+            });
+        }
+
         db.Monitors.AddRange(monitors);
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
         foreach (ServiceMonitor monitor in monitors)
         {
-            db.MonitorProbeAssignments.Add(new MonitorProbeAssignment
+            if (monitor.TargetKind == MonitorTargetKind.PublicCircuitEndpoint)
             {
-                MonitorId = monitor.Id, ProbeId = azureProbe.Id, Enabled = true,
-            });
+                db.MonitorProbeAssignments.Add(new MonitorProbeAssignment
+                {
+                    MonitorId = monitor.Id, ProbeId = azureProbe.Id, Enabled = true,
+                });
+            }
 
             db.MonitorProbeAssignments.Add(new MonitorProbeAssignment
             {
                 MonitorId = monitor.Id,
-                ProbeId = monitor.LocationId == context.Locations[2].Id ? columbusAgent.Id : dcAgent.Id,
+                ProbeId = monitor.LocationId == context.Locations[2].Id ? secondaryAgent.Id : primaryAgent.Id,
                 Enabled = true,
             });
         }
@@ -919,32 +1001,75 @@ public sealed class DemoDataSeeder(
             return;
         }
 
-        // Every rule ships DISABLED. A demo import that fires four hundred emails on day
-        // one is how a rollout becomes an incident, and how the alerts get filtered to a
-        // folder nobody reads before the tool has proved itself.
+        // Every rule ships DISABLED, and stays that way until the initial import has been
+        // reviewed and a test notification has been sent. A first import that fires four
+        // hundred emails is how a rollout becomes an incident, and how the alerts get
+        // filtered to a folder nobody reads before the tool has proved itself.
+        //
+        // Recipients below are placeholders in the example.org domain. They are deliberately
+        // not real addresses: an accidentally-enabled rule should fail to deliver rather
+        // than reach somebody.
+
+        var renewal = new NotificationRule
+        {
+            Name = "Contract renewal and notice deadline",
+            EventType = NotificationEventTypes.ContractNoticeDeadline,
+            Channels = NotificationChannel.Email | NotificationChannel.Teams,
+            NotifyRecordOwner = true,
+            SharedMailbox = "telecom-procurement@example.org",
+            TeamsChannelReference = "Telecom / Contracts",
+            ThresholdDaysCsv = "180,120,90,60,30",
+            Enabled = false,
+            EscalationSteps =
+            [
+                new NotificationEscalationStep
+                {
+                    ThresholdDays = 60,
+                    Condition = EscalationCondition.IfUnconfirmedOrNoAction,
+                    RoleScope = Roles.Procurement,
+                    Description =
+                        "Sixty days out, chase only if the deadline is still unconfirmed or " +
+                        "nobody has recorded a decision. A confirmed deadline with a recorded " +
+                        "decision does not need escalating.",
+                },
+                new NotificationEscalationStep
+                {
+                    ThresholdDays = 30,
+                    Condition = EscalationCondition.Always,
+                    RoleScope = Roles.Procurement,
+                    Recipients = "it-leadership@example.org",
+                    Description =
+                        "Thirty days out, escalate unconditionally to the owner, procurement, " +
+                        "and IT leadership. At this point the cost of a missed deadline exceeds " +
+                        "the cost of an unnecessary email.",
+                },
+            ],
+        };
+
+        var outage = new NotificationRule
+        {
+            Name = "Outage confirmed",
+            EventType = NotificationEventTypes.OutageConfirmed,
+            Channels = NotificationChannel.Teams | NotificationChannel.Email,
+            TeamsChannelReference = "IT Operations / Alerts",
+            SharedMailbox = "helpdesk@example.org",
+            RoleScope = Roles.HelpDesk,
+            Enabled = false,
+            // No thresholds: this fires on confirmation, and confirmation means the
+            // correlation engine's quorum and debounce rules were satisfied. A single
+            // advisory syslog event from The Dude cannot reach this rule — an ingested
+            // probe raises Suspect, never Down.
+        };
+
         db.NotificationRules.AddRange(
-            new NotificationRule
-            {
-                Name = "Contract notice deadline approaching",
-                EventType = NotificationEventTypes.ContractNoticeDeadline,
-                Channel = NotificationChannel.Email,
-                RoleScope = Roles.Procurement,
-                Enabled = false,
-                ThresholdConfigJson = """{"thresholdDays":[180,120,90,60,30]}""",
-            },
-            new NotificationRule
-            {
-                Name = "Outage confirmed",
-                EventType = NotificationEventTypes.OutageConfirmed,
-                Channel = NotificationChannel.Teams,
-                RoleScope = Roles.HelpDesk,
-                Enabled = false,
-            },
+            renewal,
+            outage,
             new NotificationRule
             {
                 Name = "Invoice variance detected",
                 EventType = NotificationEventTypes.InvoiceVarianceDetected,
-                Channel = NotificationChannel.Email,
+                Channels = NotificationChannel.Email,
+                SharedMailbox = "telecom-procurement@example.org",
                 RoleScope = Roles.Procurement,
                 Enabled = false,
                 ThresholdConfigJson = """{"variancePercentThreshold":10}""",
@@ -953,17 +1078,21 @@ public sealed class DemoDataSeeder(
             {
                 Name = "Integration sync failed",
                 EventType = NotificationEventTypes.IntegrationSyncFailed,
-                Channel = NotificationChannel.Email,
+                Channels = NotificationChannel.Email,
                 RoleScope = Roles.AppAdministrator,
                 Enabled = false,
             },
             new NotificationRule
             {
-                Name = "Probe offline",
+                Name = "Probe offline — monitoring coverage loss",
                 EventType = NotificationEventTypes.ProbeOffline,
-                Channel = NotificationChannel.Teams,
+                Channels = NotificationChannel.Teams,
+                TeamsChannelReference = "IT Operations / Alerts",
                 RoleScope = Roles.NetworkEngineer,
                 Enabled = false,
+                // Worded as coverage loss on purpose. A probe going quiet means we stopped
+                // being able to see those locations, not that they went down — and an alert
+                // that says "site down" when it means "we are blind" burns credibility fast.
             });
     }
 

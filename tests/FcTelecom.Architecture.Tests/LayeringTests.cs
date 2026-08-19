@@ -16,9 +16,12 @@ namespace FcTelecom.Architecture.Tests;
 /// </remarks>
 public sealed class LayeringTests
 {
-    private static readonly Assembly Domain = typeof(Domain.Common.BaseEntity).Assembly;
+    // Fully qualified deliberately: a field named `Domain` shadows the `FcTelecom.Domain`
+    // namespace inside this class, so `typeof(Domain.Common.BaseEntity)` would not compile.
+    private static readonly Assembly Domain = typeof(FcTelecom.Domain.Common.BaseEntity).Assembly;
     private static readonly Assembly Application = typeof(Permissions).Assembly;
-    private static readonly Assembly Infrastructure = typeof(Infrastructure.Persistence.ApplicationDbContext).Assembly;
+    private static readonly Assembly Infrastructure =
+        typeof(FcTelecom.Infrastructure.Persistence.ApplicationDbContext).Assembly;
 
     [Fact]
     public void Domain_DependsOnNothingInThisSolution()

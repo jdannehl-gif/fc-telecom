@@ -189,3 +189,25 @@ Sizing is relative (S / M / L / XL), not hours. Anything XL is a signal it shoul
 | Carrier portal scraping/automation | Fragile, frequently against terms of service, and a support burden that never ends |
 | Storing vendor portal passwords | Explicit guardrail. A reference to your credential manager only |
 | Real-time NetFlow / SNMP polling of circuit utilization | A different product. If utilization data is needed, ingest summaries from the platform that already collects it |
+
+---
+
+## Baseline additions from the approved Q1–Q5 answers
+
+Schema and pure-logic work landed with the baseline, because these are cheap before the
+first migration and expensive after. The user interface for each is still outstanding.
+
+| # | Item | State |
+|---|---|---|
+| B-01 | `LocationExternalIdentifier` — external-system codes (Agris and others) keyed separately from the permanent `LocationCode` | Schema done |
+| B-02 | Contract notice-deadline provenance — interpretation notes, source document, confirmed-by, overridden flag | Schema done |
+| B-03 | `NotificationChannel` as flags; `NotificationEscalationStep` child collection | Schema done |
+| B-04 | `NotificationAudienceResolver` — the "who would receive this" preview | Done, with tests |
+| B-05 | `MonitorTargetKind` and `InternalTargetKind`; `CoverageGapReason.NoInternalTarget` | Schema done |
+| B-06 | `Probe.FailureDomain` and `Probe.HostKind` | Schema done |
+| B-07 | Notification rule editor UI, test-send action, and preview screen | **Outstanding** |
+| B-08 | Notice-deadline confirmation UI (confirm, override, record interpretation, attach source document) | **Outstanding** |
+| B-09 | Import template column for the external location code | **Outstanding** |
+| B-10 | Admin warning when every probe on a monitor shares a failure domain | **Outstanding** |
+| B-11 | Data-completeness entry for locations with no internal target, and monitors with a weak internal target | **Outstanding** |
+| B-12 | Probe agent as a cross-platform .NET Worker, packaged as a Windows Service | **Outstanding** (Phase 3) |

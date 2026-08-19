@@ -1,7 +1,7 @@
-# 00 — Assumptions, Decisions, and Open Questions
+# 00 — Assumptions and Approved Decisions
 
 **Product:** FC Telecom Manager — ISP & telecom service management for a multi-location organization
-**Status:** Design baseline for Phase 1
+**Status:** Phase 1 baseline — approved 2026-08-19, subject to compilation, testing, and Azure validation
 **Last updated:** 2026-08-19
 
 ---
@@ -58,51 +58,130 @@ Each is stated so you can veto it cheaply. None are load-bearing enough that rev
 
 ---
 
-## 3. Open questions
+## 3. Approved answers to the five questions
 
-Five questions, each with a recommended default. If you say nothing, we build the default.
+Answered and approved 2026-08-19. These are now baseline, not proposals.
 
-### Q1 — Where should the self-hosted probe agent run, and how many?
+### Q1 — Probe-agent placement · **Two self-hosted agents plus the Azure perspective**
 
-The availability design needs at least two independent vantage points. Azure Functions give one (public internet, no ICMP). The agent gives the other.
+- **Primary agent:** a dedicated small VM in the **Dorchester datacenter**.
+- **Secondary agent:** a geographically separate major location with independent power and
+  internet, **not** sharing a virtualization cluster or primary network failure domain with
+  the Dorchester agent.
+- **Never on a domain controller.**
+- **Outbound-only** agent-to-cloud communication, without exception.
+- The agent is a **cross-platform .NET Worker**. **Windows Service** is the initially
+  documented and supported deployment; systemd and container hosting stay available and are
+  recorded on `Probe.HostKind`.
+- Quorum and confidence rules are seeded for two agents plus Azure.
+- **The inventory application remains fully usable with one agent or none.** Monitoring is
+  decoupled by design and every availability figure is nullable.
 
-**Recommended default:** one agent at your primary datacenter/HQ and a second at a geographically separate large site, both on hardware you already have (a small VM or a container on an existing host). Two agents plus the Azure perspective means a single agent going offline degrades confidence rather than fabricating an outage.
+*Encoded as:* `Probe.FailureDomain` (free text, e.g. `Dorchester DC / cluster-A / feed-1`)
+and `Probe.HostKind`. Two probes are only two perspectives if they can fail independently —
+same cluster or same UPS makes them one perspective wearing two hats, and the quorum rule
+would count it twice and report a confident outage that is really a power event. Recorded
+rather than enforced, because sometimes one perspective is all there is.
 
-**Why it matters now:** it determines whether the agent is a Windows Service, a systemd unit, or a container, and whether agent-to-cloud is outbound-only. *Our design is outbound-only long-polling in all three cases*, so this is cheap to defer — but the count affects the quorum rules we seed.
+### Q2 — Monitoring targets · **Both public circuit targets and internal location targets**
 
----
+- From Azure: the public IP or other suitable external endpoint for **every individual
+  circuit**, monitored separately per circuit at multi-WAN sites.
+- From the agents: **one internal always-on target per location** wherever routing permits.
+- Preferred internal target is the **branch firewall's LAN/management address** or the
+  **management VLAN gateway**. Explicitly **not** a workstation or printer.
+- The internal target indicates overall location and VPN reachability.
+- Circuit reachability, internal location reachability, monitoring-agent failure, and
+  unknown status are **four distinct states**, never collapsed.
+- Locations with no internal target appear as **monitoring coverage gaps**.
 
-### Q2 — Do you want per-location internal targets monitored, or public circuit IPs only?
+*Encoded as:* `MonitorTargetKind` (`PublicCircuitEndpoint` / `InternalLocationTarget`),
+`InternalTargetKind` (with an explicit `NotSuitable` value so an existing bad choice is
+recorded and reported rather than silently trusted), and
+`CoverageGapReason.NoInternalTarget`. Agent failure is already distinguished by
+`OutageClassification.MonitoringFailure`, which records a coverage gap instead of opening
+an outage.
 
-Monitoring only a circuit's public IP has a well-known blind spot: the carrier's CPE or your firewall answers while the transport behind it is degraded or the LAN behind it is down. Monitoring an internal target (a switch, an AP controller, a printer VLAN gateway) catches that, but requires the probe agent to have a path to the site.
+### Q3 — Authoritative location source · **Controlled CSV/Excel import only, in Phase 1**
 
-**Recommended default:** monitor the public IP of every circuit from Azure *and* one internal target per location from the agent, where a path exists. Record locations without an internal target as a **coverage gap** on the dashboard rather than pretending coverage is complete.
+- A permanent enterprise **`LocationCode`** is the required natural key.
+- **Location name is never an integration key.**
+- Agris may supply the initial business-location list, but **not every monitored facility
+  exists as a conventional Agris location**.
+- An **optional external-system identifier** is carried separately; the permanent
+  `LocationCode` is never synonymous with an Agris value.
+- This application is the system of record for telecom-specific location detail. A
+  scheduled read-only integration with Agris or another facility master can be evaluated later.
 
----
+*Encoded as:* a `LocationExternalIdentifier` child table keyed on `(SystemKey, Value)`
+rather than an `AgrisLocationCode` column. A tower site, a leased closet, or a warehouse
+annexe can be a real telecom location with no counterpart in the facility master — and a
+nullable column named after one system invites exactly the conflation this avoids. It also
+means a second external system costs a row, not a migration.
 
-### Q3 — What is the authoritative source for the location list today?
+### Q4 — Ambiguous contract deadlines · **Proposed-and-confirmed workflow**
 
-Most organizations already have one — Active Directory sites, an ERP location table, a store-master spreadsheet, or IT Glue itself. Whichever it is becomes the import template's shape and, later, the candidate for a scheduled inbound sync.
+The system calculates a proposed `NoticeDeadlineDate` and it **remains explicitly
+unconfirmed until a person reviews it**. Unconfirmed deadlines **continue producing alerts**
+and appear in a distinct **Needs Review** state.
 
-**Recommended default:** treat the CSV/Excel import as the only inbound path for Phase 1 and make `LocationCode` the natural key that must match your existing system. No integration keys on names.
+Recorded for every deadline:
 
----
+| Field | Purpose |
+|---|---|
+| `ProposedNoticeDeadlineDate` | What the system calculated |
+| `NoticeDeadlineDate` | The confirmed or overridden date — the one alerts use |
+| `NoticeDeadlineConfirmed` | Whether a person has reviewed it |
+| `NoticeDeadlineConfirmedByUserId` / `…ConfirmedBy` | Who confirmed it |
+| `NoticeDeadlineConfirmedUtc` | When |
+| `NoticeDeadlineInterpretationNotes` | How they read the contract language |
+| `NoticeDeadlineSourceDocumentId` | The agreement or amendment it was read from |
+| `NoticeDeadlineWasOverridden` | Derived: confirmed date differs from the proposal |
 
-### Q4 — How should contract *notice deadlines* be handled when the contract paperwork is ambiguous?
+**A calculated deadline is never silently treated as authoritative.**
 
-Real telecom contracts are frequently vague: "90 days prior to the end of the then-current term," where "then-current term" is itself disputed after an auto-renewal.
+The interpretation note is what makes a confirmed deadline defensible a year later, when
+the person who confirmed it has moved on and someone is arguing with a carrier about
+whether notice was timely. `NoticeDeadlineWasOverridden` is derived rather than stored, and
+is surfaced because a systematically wrong proposal is worth noticing: if reviewers keep
+overriding the calculation the same way, the calculation is wrong.
 
-**Recommended default:** store `NoticeDeadlineDate` as an explicit, human-confirmable date field that the system *proposes* (from `EndDate − NoticePeriodDays`) but a person must **confirm**. Unconfirmed deadlines appear on the dashboard in a distinct "needs review" state. The alternative — computing it silently — produces a number nobody trusts, which defeats the purpose of the tool.
+### Q5 — Notifications · **Created, and left disabled until import review and testing are complete**
 
----
+**Renewal and notice deadlines**
 
-### Q5 — Who receives renewal and outage alerts, and through which channel first?
+- Email the **contract owner** and a configurable **shared telecom/procurement mailbox**.
+- Post to a configurable **Teams channel**.
+- Fire at **180, 120, 90, 60, 30** days.
+- **Escalate at 60 days** if the deadline remains unconfirmed **or** no action has been recorded.
+- **Escalate at 30 days** to the contract owner, procurement, and a configurable **IT
+  leadership** recipient.
 
-**Recommended default:** two notification rules ship seeded and disabled:
-- *Renewal notice deadline* → email to the contract owner + a Teams channel via Microsoft Graph, at 180/120/90/60/30 days.
-- *Outage confirmed* → Teams channel immediately, email to the Help Desk distribution list.
+**Confirmed outages**
 
-Both are editable in the UI. They ship **disabled** so a demo import cannot send 400 emails on day one.
+- Post immediately to a configurable **IT Operations/Help Desk Teams channel**.
+- Email a configurable **Help Desk distribution list**.
+- **Never sent from a single advisory Dude syslog event** — confirmation requires the
+  monitoring quorum rules. An ingested probe raises `Suspect`, never `Down`.
+
+**Integration and probe failures**
+
+- Notify application administrators.
+- Probe failures are reported as **monitoring coverage loss / Unknown status**, never as
+  confirmed location outages.
+
+**All** recipients, schedules, escalation rules, and channels are editable in the
+application. A **test-notification** function and a **preview** showing exactly who would
+receive an alert are required before a rule can be enabled.
+
+*Encoded as:* `NotificationChannel` becomes a flags enum (one event legitimately goes to
+email and Teams at once), and escalation becomes a `NotificationEscalationStep` child
+collection rather than a pair of fields — because "chase at 60 if unconfirmed" and "tell
+leadership at 30 regardless" are two different audiences under two different conditions,
+and flattening them loses one. The preview is
+`NotificationAudienceResolver`, a pure function with its own test suite: the most common
+notification failure is not a delivery bug but a rule that reaches nobody, or four hundred
+people, and nobody finding out until it fired.
 
 ---
 

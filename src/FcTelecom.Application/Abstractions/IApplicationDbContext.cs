@@ -36,6 +36,7 @@ public interface IApplicationDbContext
     DbSet<CostCenter> CostCenters { get; }
     DbSet<Contact> Contacts { get; }
     DbSet<LocationContact> LocationContacts { get; }
+    DbSet<LocationExternalIdentifier> LocationExternalIdentifiers { get; }
 
     // Vendors
     DbSet<Vendor> Vendors { get; }
@@ -95,6 +96,7 @@ public interface IApplicationDbContext
     DbSet<SyncRun> SyncRuns { get; }
     DbSet<SyncLogEntry> SyncLogEntries { get; }
     DbSet<NotificationRule> NotificationRules { get; }
+    DbSet<NotificationEscalationStep> NotificationEscalationSteps { get; }
     DbSet<NotificationOutboxMessage> NotificationOutbox { get; }
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);

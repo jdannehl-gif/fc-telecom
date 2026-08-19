@@ -62,14 +62,11 @@ public static class DependencyInjection
                 CoreEventId.PossibleIncorrectRequiredNavigationWithQueryFilterInteractionWarning));
         });
 
-        // A factory alongside the scoped context, for the security event logger — which
-        // must be able to write outside the caller's transaction (see SecurityEventLogger).
-        services.AddDbContextFactory<ApplicationDbContext>((provider, options) =>
-        {
-            options.UseSqlServer(connectionString);
-            options.ConfigureWarnings(warnings => warnings.Ignore(
-                CoreEventId.PossibleIncorrectRequiredNavigationWithQueryFilterInteractionWarning));
-        }, lifetime: ServiceLifetime.Singleton);
+        // Note there is deliberately no AddDbContextFactory here. Registering a factory
+        // alongside AddDbContext registers DbContextOptions<T> twice with different
+        // lifetimes, and which one wins depends on registration order. The security event
+        // logger needs an independent context, and it gets one from a fresh DI scope
+        // instead — same effect, no ambiguity.
 
         services.AddScoped<IApplicationDbContext>(provider =>
             provider.GetRequiredService<ApplicationDbContext>());

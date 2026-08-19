@@ -156,6 +156,18 @@ public enum CoverageGapReason
     SystemOutage = 4,
     Deploying = 5,
     NeverConfigured = 6,
+
+    /// <summary>
+    /// The location has no internal always-on target, so internal reachability and VPN
+    /// health cannot be observed there.
+    /// </summary>
+    /// <remarks>
+    /// Recorded as a coverage gap rather than passed over in silence. A site monitored only
+    /// from the outside can have every circuit answering while everything behind the
+    /// firewall is dark, and the reports must say that we cannot see it rather than imply
+    /// that we looked.
+    /// </remarks>
+    NoInternalTarget = 7,
 }
 
 /// <summary>

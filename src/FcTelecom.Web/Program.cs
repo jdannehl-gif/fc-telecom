@@ -38,27 +38,36 @@ builder.Services.AddApplicationInsightsTelemetry();
 // is no password database to leak and no reset flow to abuse.
 builder.Services
     .AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
-    .AddMicrosoftIdentityWebApp(options =>
-    {
-        builder.Configuration.GetSection("AzureAd").Bind(options);
+    .AddMicrosoftIdentityWebApp(builder.Configuration.GetSection("AzureAd"));
 
-        // Permissions are resolved once at sign-in and carried as claims for the session.
+// Permission claims are resolved once at sign-in and carried for the session.
+//
+// This is configured AFTER AddMicrosoftIdentityWebApp and chains the existing handler
+// rather than replacing it. Microsoft.Identity.Web installs its own OnTokenValidated to
+// populate the token cache; assigning over it looks harmless and quietly breaks downstream
+// token acquisition, which then fails later and somewhere else.
+builder.Services.Configure<OpenIdConnectOptions>(
+    OpenIdConnectDefaults.AuthenticationScheme,
+    options =>
+    {
+        Func<TokenValidatedContext, Task> previous = options.Events.OnTokenValidated;
+
         options.Events.OnTokenValidated = async context =>
         {
-            if (context.Principal is null)
+            await previous(context).ConfigureAwait(false);
+
+            if (context.Principal?.Identity is not ClaimsIdentity identity)
             {
                 return;
             }
 
-            var enricher = context.HttpContext.RequestServices
+            PermissionClaimsEnricher enricher = context.HttpContext.RequestServices
                 .GetRequiredService<PermissionClaimsEnricher>();
 
-            IReadOnlyList<Claim> claims = await enricher.BuildClaimsAsync(context.Principal);
+            IReadOnlyList<Claim> claims =
+                await enricher.BuildClaimsAsync(context.Principal).ConfigureAwait(false);
 
-            if (context.Principal.Identity is ClaimsIdentity identity)
-            {
-                identity.AddClaims(claims);
-            }
+            identity.AddClaims(claims);
         };
     });
 

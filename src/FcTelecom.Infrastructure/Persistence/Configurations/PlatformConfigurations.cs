@@ -365,9 +365,44 @@ public sealed class NotificationRuleConfiguration : IEntityTypeConfiguration<Not
         builder.Property(rule => rule.Name).HasMaxLength(150).IsRequired();
         builder.Property(rule => rule.EventType).HasMaxLength(80).IsRequired();
         builder.Property(rule => rule.Recipients).HasMaxLength(2000);
+        builder.Property(rule => rule.SharedMailbox).HasMaxLength(320);
+        builder.Property(rule => rule.TeamsChannelReference).HasMaxLength(400);
+        builder.Property(rule => rule.WebhookUrl).HasMaxLength(1000);
         builder.Property(rule => rule.RoleScope).HasMaxLength(60);
+        builder.Property(rule => rule.ThresholdDaysCsv).HasMaxLength(200);
+
+        // Derived helpers, not columns.
+        builder.Ignore(rule => rule.HasNoPossibleRecipient);
 
         builder.HasIndex(rule => new { rule.EventType, rule.Enabled });
+    }
+}
+
+public sealed class NotificationEscalationStepConfiguration
+    : IEntityTypeConfiguration<NotificationEscalationStep>
+{
+    public void Configure(EntityTypeBuilder<NotificationEscalationStep> builder)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        builder.ToTable("NotificationEscalationSteps");
+        builder.Property(step => step.RowVersion).IsRowVersion();
+        builder.Property(step => step.Recipients).HasMaxLength(2000);
+        builder.Property(step => step.RoleScope).HasMaxLength(60);
+        builder.Property(step => step.Description).HasMaxLength(500);
+
+        builder.HasOne(step => step.Rule)
+            .WithMany(rule => rule.EscalationSteps)
+            .HasForeignKey(step => step.RuleId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // One step per threshold per rule. Two steps at 60 days is always a mistake, and
+        // the resulting double-escalation is exactly the noise that trains people to
+        // ignore escalations.
+        builder.HasIndex(step => new { step.RuleId, step.ThresholdDays })
+            .IsUnique()
+            .HasFilter("[IsArchived] = 0")
+            .HasDatabaseName("UX_NotificationEscalationSteps_Rule_Threshold");
     }
 }
 

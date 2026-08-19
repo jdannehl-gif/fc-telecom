@@ -75,6 +75,41 @@ public sealed class LocationConfiguration : IEntityTypeConfiguration<Location>
 
         builder.HasIndex(location => new { location.RegionId, location.Status });
         builder.HasIndex(location => location.Criticality);
+
+        builder.Ignore(location => location.HasCoordinates);
+        builder.Ignore(location => location.DisplayName);
+    }
+}
+
+public sealed class LocationExternalIdentifierConfiguration
+    : IEntityTypeConfiguration<LocationExternalIdentifier>
+{
+    public void Configure(EntityTypeBuilder<LocationExternalIdentifier> builder)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        builder.ToTable("LocationExternalIdentifiers");
+        builder.Property(identifier => identifier.RowVersion).IsRowVersion();
+        builder.Property(identifier => identifier.SystemKey).HasMaxLength(60).IsRequired();
+        builder.Property(identifier => identifier.Value).HasMaxLength(100).IsRequired();
+
+        builder.HasOne(identifier => identifier.Location)
+            .WithMany(location => location.ExternalIdentifiers)
+            .HasForeignKey(identifier => identifier.LocationId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // One value per system per location, and one location per value within a system.
+        // Two locations claiming the same Agris code means the facility master and this
+        // inventory disagree about what a location is, which is worth failing an import over.
+        builder.HasIndex(identifier => new { identifier.LocationId, identifier.SystemKey })
+            .IsUnique()
+            .HasFilter("[IsArchived] = 0")
+            .HasDatabaseName("UX_LocationExternalIdentifiers_Location_System");
+
+        builder.HasIndex(identifier => new { identifier.SystemKey, identifier.Value })
+            .IsUnique()
+            .HasFilter("[IsArchived] = 0")
+            .HasDatabaseName("UX_LocationExternalIdentifiers_System_Value");
     }
 }
 

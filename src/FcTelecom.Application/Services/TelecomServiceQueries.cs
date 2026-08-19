@@ -165,8 +165,9 @@ public sealed class TelecomServiceQueries(
             .Include(item => item.Bandwidth)
             .Include(item => item.Identifiers)
             .Include(item => item.PhoneNumbers)
-            .Include(item => item.Dependencies).ThenInclude(dependency => dependency.DependsOnService)
-                .ThenInclude(other => other!.CarrierVendor)
+            .Include(item => item.Dependencies)
+                .ThenInclude(dependency => dependency.DependsOnService)
+                .ThenInclude(other => other.CarrierVendor)
             .Include(item => item.Monitors)
             .FirstOrDefaultAsync(item => item.Id == id, cancellationToken)
             .ConfigureAwait(false);

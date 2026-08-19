@@ -9,19 +9,36 @@ vantage point Azure cannot provide: ICMP, and visibility of internal targets.
 back. There is no inbound connection, ever, and no firewall rule to open at any site. If
 someone tells you the agent needs an inbound port, they are describing a different product.
 
+**Placement is decided.** Two agents plus the Azure perspective:
+
+| | Host | Failure domain |
+|---|---|---|
+| Primary | A dedicated small VM in the **Dorchester datacenter** | e.g. `Dorchester DC / cluster-A / feed-1` |
+| Secondary | A geographically separate major location with **independent power and internet** | Must not share a virtualization cluster or primary network failure domain with the primary |
+
+**Never install an agent on a domain controller.**
+
+Record the failure domain on the probe record. Two agents are only two perspectives if they
+can fail independently — same cluster, same UPS, or same upstream circuit makes them one
+perspective wearing two hats, and the quorum rule will count it twice and declare a
+confident outage that is really a power event.
+
 Requirements:
 
-- A small Linux or Windows host at the site (a VM or a container is fine; ~100 MB RAM)
+- A dedicated small VM (~100 MB RAM). The agent is a cross-platform .NET Worker;
+  **Windows Service is the supported deployment**, with systemd and container available.
 - Outbound HTTPS to the application and to `login.microsoftonline.com`
-- Network paths to whatever it will check
+- Network paths to whatever it will check, including one internal target per location
 
 ## 1. Register the agent
 
 **Administration → Probes → Add probe.**
 
-- Name: something that identifies the site — `Agent — Chicago DC`
+- Name: something that identifies the site — `Agent — Dorchester DC`
 - Kind: `SelfHostedAgent`
 - Location: the site it sits at
+- Host kind: `WindowsService`
+- **Failure domain**: datacenter / cluster / power feed, e.g. `Dorchester DC / cluster-A / feed-1`
 
 Recording the location matters: it is how the correlation engine knows that a probe going
 quiet is one vantage point lost rather than a site going dark.
@@ -31,11 +48,11 @@ quiet is one vantage point lost rather than a site going dark.
 Each agent authenticates as its own application, with one app role.
 
 ```bash
-az ad app create --display-name "FC Telecom Probe — Chicago DC"
+az ad app create --display-name "FC Telecom Probe — Dorchester DC"
 az ad sp create --id <app-id>
 
 az keyvault secret set --vault-name <kv> \
-    --name probe-hmac-chicago-dc \
+    --name probe-hmac-dorchester-dc \
     --value "$(openssl rand -base64 32)"
 ```
 
@@ -43,6 +60,32 @@ Grant the `Probe.Submit` app role and nothing else. That role satisfies only the
 endpoints; a user policy will reject it, and a user will never satisfy it.
 
 ## 3. Install
+
+### Windows Service — the supported method
+
+```powershell
+# Extract to a fixed path, e.g. C:\Program Files\FcTelecom\Agent
+Expand-Archive .\fctelecom-probeagent-win-x64.zip -DestinationPath 'C:\Program Files\FcTelecom\Agent'
+
+# Configuration lives in the machine environment, not in a file next to the binary.
+[Environment]::SetEnvironmentVariable('FcTelecom__ApiBaseUrl','https://fctel-prod-web.azurewebsites.net','Machine')
+[Environment]::SetEnvironmentVariable('FcTelecom__TenantId','<tenant-guid>','Machine')
+[Environment]::SetEnvironmentVariable('FcTelecom__ClientId','<agent-app-id>','Machine')
+[Environment]::SetEnvironmentVariable('FcTelecom__ProbeId','<probe guid from step 1>','Machine')
+
+# The client secret and HMAC key are set separately and are not echoed into a transcript.
+New-Service -Name FcTelecomProbeAgent `
+            -BinaryPathName '"C:\Program Files\FcTelecom\Agent\FcTelecom.ProbeAgent.exe"' `
+            -DisplayName 'FC Telecom Probe Agent' `
+            -StartupType Automatic
+Start-Service FcTelecomProbeAgent
+Get-EventLog -LogName Application -Source FcTelecomProbeAgent -Newest 20
+```
+
+Run the service as a **dedicated low-privilege account**, not LocalSystem. ICMP from a
+Windows service does not require elevation, so there is nothing to gain from it.
+
+### Linux — systemd
 
 ```bash
 # Linux

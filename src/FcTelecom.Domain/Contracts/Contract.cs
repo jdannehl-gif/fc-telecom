@@ -86,7 +86,39 @@ public class Contract : AuditableEntity
 
     public bool NoticeDeadlineConfirmed { get; set; }
     public Guid? NoticeDeadlineConfirmedByUserId { get; set; }
+    public AppUser? NoticeDeadlineConfirmedBy { get; set; }
     public DateTime? NoticeDeadlineConfirmedUtc { get; set; }
+
+    /// <summary>
+    /// How the reviewer read the contract language, in their own words.
+    /// </summary>
+    /// <remarks>
+    /// This is the field that makes a confirmed deadline defensible a year later, when the
+    /// person who confirmed it has moved on and someone is arguing with a carrier about
+    /// whether notice was timely. "Section 4.2 counts from the end of the then-current
+    /// term; after the 2025 roll that is 2026-10-31, so notice is due 2026-10-01" is worth
+    /// far more than a date on its own.
+    /// </remarks>
+    public string? NoticeDeadlineInterpretationNotes { get; set; }
+
+    /// <summary>The agreement or amendment the confirmed date was read from.</summary>
+    public Guid? NoticeDeadlineSourceDocumentId { get; set; }
+    public Document? NoticeDeadlineSourceDocument { get; set; }
+
+    /// <summary>
+    /// True when a person confirmed a date that differs from the one the system proposed.
+    /// </summary>
+    /// <remarks>
+    /// Derived rather than stored — it is a comparison of two fields that are both already
+    /// persisted, and storing it would create a third thing that can disagree with the other
+    /// two. Surfaced because a systematically wrong proposal is worth noticing: if reviewers
+    /// keep overriding the calculation the same way, the calculation is wrong.
+    /// </remarks>
+    public bool NoticeDeadlineWasOverridden =>
+        NoticeDeadlineConfirmed &&
+        NoticeDeadlineDate is not null &&
+        ProposedNoticeDeadlineDate is not null &&
+        NoticeDeadlineDate != ProposedNoticeDeadlineDate;
 
     public string? EarlyTerminationTerms { get; set; }
 

@@ -218,9 +218,14 @@ public sealed class DashboardQueries(IApplicationDbContext db, ICurrentUser curr
             var rollupRows = await db.AvailabilityRollups
                 .AsNoTracking()
                 .Where(rollup => rollup.Grain == RollupGrain.Daily && rollup.PeriodStartUtc >= windowStart)
+                // Both key expressions must have the same type. AvailabilityRollup.ServiceId
+                // is Guid? (a monitor may watch a location-level internal target rather than
+                // one circuit), so the right-hand key is lifted to Guid? rather than the
+                // left-hand one being force-unwrapped — a rollup with no service must not
+                // throw, it must simply not join.
                 .Join(db.TelecomServices,
                       rollup => rollup.ServiceId,
-                      service => service.Id,
+                      service => (Guid?)service.Id,
                       (rollup, service) => new
                       {
                           Rollup = rollup,

@@ -86,9 +86,60 @@ public class Location : AuditableEntity
     public ICollection<TelecomService> Services { get; set; } = [];
     public ICollection<LocationContact> Contacts { get; set; } = [];
 
+    /// <summary>
+    /// Identifiers this location carries in other systems.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately a child collection rather than an <c>AgrisLocationCode</c> column.
+    /// Not every monitored facility exists as a conventional Agris location — a tower site,
+    /// a leased closet, or a warehouse annexe may be a real telecom location with no
+    /// counterpart in the facility master — and a nullable column named after one system
+    /// invites exactly the conflation this design is trying to avoid.
+    /// <para>
+    /// <see cref="LocationCode"/> remains the permanent enterprise key and is never
+    /// synonymous with an external value.
+    /// </para>
+    /// </remarks>
+    public ICollection<LocationExternalIdentifier> ExternalIdentifiers { get; set; } = [];
+
     public bool HasCoordinates => Latitude.HasValue && Longitude.HasValue;
 
     public string DisplayName => $"{LocationCode} · {Name}";
+
+    /// <summary>The identifier this location carries in a named external system, if any.</summary>
+    public string? ExternalCodeFor(string systemKey) =>
+        ExternalIdentifiers.FirstOrDefault(identifier =>
+            string.Equals(identifier.SystemKey, systemKey, StringComparison.OrdinalIgnoreCase))?.Value;
+}
+
+/// <summary>Well-known external systems that carry their own location identifiers.</summary>
+public static class ExternalLocationSystems
+{
+    public const string Agris = "Agris";
+
+    public static readonly IReadOnlyList<string> Known = [Agris];
+}
+
+/// <summary>
+/// A location's identifier in some other system of record.
+/// </summary>
+/// <remarks>
+/// This application is the system of record for telecom-specific location detail. These
+/// identifiers exist so a future read-only integration with a facility master can match
+/// deterministically on an ID rather than on a name — and so that a location which has no
+/// counterpart in that system is representable rather than awkward.
+/// </remarks>
+public class LocationExternalIdentifier : AuditableEntity
+{
+    public Guid LocationId { get; set; }
+    public Location Location { get; set; } = null!;
+
+    /// <summary>A value from <see cref="ExternalLocationSystems"/>, or any other system name.</summary>
+    public required string SystemKey { get; set; }
+
+    public required string Value { get; set; }
+
+    public string? Notes { get; set; }
 }
 
 /// <summary>A postal address. Owned by its parent — no table of its own.</summary>

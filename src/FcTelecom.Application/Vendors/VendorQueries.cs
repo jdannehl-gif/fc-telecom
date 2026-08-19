@@ -66,7 +66,7 @@ public sealed class VendorQueries(IApplicationDbContext db, ICurrentUser current
                                           EF.Functions.Like(vendor.LegalName, like));
         }
 
-        return await query
+        PagedResult<VendorListItemDto> result = await query
             .OrderBy(vendor => vendor.DisplayName)
             .Select(vendor => new VendorListItemDto(
                 vendor.Id,
@@ -78,17 +78,21 @@ public sealed class VendorQueries(IApplicationDbContext db, ICurrentUser current
                 db.TelecomServices.Count(service => service.CarrierVendorId == vendor.Id &&
                                                     service.Status == ServiceStatus.Active),
                 vendor.Accounts.Count,
-                canSeeCosts
-                    ? db.TelecomServices
-                        .Where(service => service.CarrierVendorId == vendor.Id &&
-                                          service.Status == ServiceStatus.Active)
-                        .SelectMany(service => service.CostHistory)
-                        .Where(cost => cost.EffectiveFrom <= today &&
-                                       (cost.EffectiveTo == null || cost.EffectiveTo >= today))
-                        .Sum(cost => (decimal?)(cost.MonthlyRecurringCharge + cost.TaxesAndFees + cost.EquipmentRental))
-                    : null))
+                // Unconditional, then stripped below — see the note in LocationQueries on
+                // why a permission flag does not belong inside an EF projection.
+                db.TelecomServices
+                    .Where(service => service.CarrierVendorId == vendor.Id &&
+                                      service.Status == ServiceStatus.Active)
+                    .SelectMany(service => service.CostHistory)
+                    .Where(cost => cost.EffectiveFrom <= today &&
+                                   (cost.EffectiveTo == null || cost.EffectiveTo >= today))
+                    .Sum(cost => (decimal?)(cost.MonthlyRecurringCharge + cost.TaxesAndFees + cost.EquipmentRental))))
             .ToPagedResultAsync(page, pageSize, cancellationToken)
             .ConfigureAwait(false);
+
+        return canSeeCosts
+            ? result
+            : result with { Items = [.. result.Items.Select(item => item with { MonthlySpend = null })] };
     }
 
     public async Task<VendorDetailDto> GetDetailAsync(Guid id, CancellationToken cancellationToken = default)

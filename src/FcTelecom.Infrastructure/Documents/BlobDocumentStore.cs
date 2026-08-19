@@ -86,9 +86,13 @@ public sealed class BlobDocumentStore(
         // and storage. Without it, a link occasionally arrives "not yet valid".
         DateTimeOffset startsOn = DateTimeOffset.UtcNow.AddMinutes(-5);
 
-        Azure.Storage.Blobs.Models.UserDelegationKey delegationKey =
+        // GetUserDelegationKeyAsync returns Response<UserDelegationKey>; Azure.Response<T>
+        // has no implicit conversion to T, so the .Value is required.
+        Azure.Response<UserDelegationKey> delegationKeyResponse =
             await blobServiceClient.GetUserDelegationKeyAsync(startsOn, expiresOn, cancellationToken)
                 .ConfigureAwait(false);
+
+        UserDelegationKey delegationKey = delegationKeyResponse.Value;
 
         var builder = new BlobSasBuilder
         {

@@ -179,18 +179,33 @@ public sealed class LocationQueries(IApplicationDbContext db, ICurrentUser curre
             location.Region != null ? location.Region.Name : null,
             location.Criticality,
             location.Services.Count(service => service.Status == ServiceStatus.Active),
-            canSeeCosts
-                ? location.Services
-                    .SelectMany(service => service.CostHistory)
-                    .Where(cost => cost.EffectiveFrom <= today &&
-                                   (cost.EffectiveTo == null || cost.EffectiveTo >= today))
-                    .Sum(cost => (decimal?)(cost.MonthlyRecurringCharge + cost.TaxesAndFees + cost.EquipmentRental))
-                : null,
-            canSeeCosts ? "USD" : null,
+            // Computed unconditionally, then stripped below for callers without Costs.Read.
+            //
+            // The obvious alternative — wrapping this aggregate in `canSeeCosts ? … : null`
+            // — puts a captured bool inside the projection, which EF Core turns into a
+            // parameterised CASE around a correlated aggregate subquery. That translates on
+            // some provider versions and throws on others, and the failure surfaces at
+            // runtime on a list page rather than at build time. One query shape is worth
+            // more than one skipped SUM.
+            location.Services
+                .SelectMany(service => service.CostHistory)
+                .Where(cost => cost.EffectiveFrom <= today &&
+                               (cost.EffectiveTo == null || cost.EffectiveTo >= today))
+                .Sum(cost => (decimal?)(cost.MonthlyRecurringCharge + cost.TaxesAndFees + cost.EquipmentRental)),
+            "USD",
             db.OutageEvents.Any(outage => outage.LocationId == location.Id && outage.EndUtc == null)));
 
-        return await projected.ToPagedResultAsync(filter.Page, filter.PageSize, cancellationToken)
-            .ConfigureAwait(false);
+        PagedResult<LocationListItemDto> result =
+            await projected.ToPagedResultAsync(filter.Page, filter.PageSize, cancellationToken)
+                .ConfigureAwait(false);
+
+        // The figure never reaches the caller's object graph, only the app tier's.
+        return canSeeCosts
+            ? result
+            : result with
+            {
+                Items = [.. result.Items.Select(item => item with { MonthlyCost = null, CurrencyCode = null })],
+            };
     }
 
     public async Task<LocationDetailDto> GetDetailAsync(Guid id, CancellationToken cancellationToken = default)

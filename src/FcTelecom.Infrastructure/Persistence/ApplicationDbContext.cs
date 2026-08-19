@@ -24,6 +24,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
     public DbSet<CostCenter> CostCenters => Set<CostCenter>();
     public DbSet<Contact> Contacts => Set<Contact>();
     public DbSet<LocationContact> LocationContacts => Set<LocationContact>();
+    public DbSet<LocationExternalIdentifier> LocationExternalIdentifiers => Set<LocationExternalIdentifier>();
 
     // Vendors
     public DbSet<Vendor> Vendors => Set<Vendor>();
@@ -83,6 +84,7 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
     public DbSet<SyncRun> SyncRuns => Set<SyncRun>();
     public DbSet<SyncLogEntry> SyncLogEntries => Set<SyncLogEntry>();
     public DbSet<NotificationRule> NotificationRules => Set<NotificationRule>();
+    public DbSet<NotificationEscalationStep> NotificationEscalationSteps => Set<NotificationEscalationStep>();
     public DbSet<NotificationOutboxMessage> NotificationOutbox => Set<NotificationOutboxMessage>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -95,9 +97,44 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(ApplicationDbContext).Assembly);
 
         ApplySoftDeleteFilters(modelBuilder);
+        ApplyRowVersionConvention(modelBuilder);
         ApplyMoneyPrecision(modelBuilder);
 
         base.OnModelCreating(modelBuilder);
+    }
+
+    /// <summary>
+    /// Marks every inherited <c>RowVersion</c> property as a SQL Server concurrency token.
+    /// </summary>
+    /// <remarks>
+    /// Every entity deriving from <c>BaseEntity</c> has the property, but marking it is a
+    /// per-configuration call that is easy to forget — and forgetting is silent. The column
+    /// is still created, just as a nullable <c>varbinary(max)</c> that nobody checks, so two
+    /// people editing the same circuit simply overwrite each other with no error.
+    /// <para>
+    /// Applied by convention for the same reason as the soft-delete filter: the failure
+    /// mode of the per-entity approach is invisible until it costs someone their work.
+    /// </para>
+    /// </remarks>
+    private static void ApplyRowVersionConvention(ModelBuilder modelBuilder)
+    {
+        foreach (var entityType in modelBuilder.Model.GetEntityTypes())
+        {
+            if (entityType.BaseType is not null || !typeof(BaseEntity).IsAssignableFrom(entityType.ClrType))
+            {
+                continue;
+            }
+
+            var property = entityType.FindProperty(nameof(BaseEntity.RowVersion));
+            if (property is null)
+            {
+                continue;
+            }
+
+            property.SetIsConcurrencyToken(true);
+            property.ValueGenerated = Microsoft.EntityFrameworkCore.Metadata.ValueGenerated.OnAddOrUpdate;
+            property.SetColumnType("rowversion");
+        }
     }
 
     /// <summary>

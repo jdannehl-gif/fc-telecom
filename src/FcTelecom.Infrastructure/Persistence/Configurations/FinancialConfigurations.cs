@@ -288,10 +288,30 @@ public sealed class ContractConfiguration : IEntityTypeConfiguration<Contract>
             .HasForeignKey(contract => contract.VendorId)
             .OnDelete(DeleteBehavior.Restrict);
 
+        builder.Property(contract => contract.NoticeDeadlineInterpretationNotes).HasMaxLength(2000);
+
+        builder.Ignore(contract => contract.NoticeDeadlineWasOverridden);
+        builder.Ignore(contract => contract.EffectiveNoticeDeadline);
+        builder.Ignore(contract => contract.HasIncompleteTerms);
+        builder.Ignore(contract => contract.IsActionable);
+
         builder.HasOne(contract => contract.ContractOwner)
             .WithMany()
             .HasForeignKey(contract => contract.ContractOwnerUserId)
             .OnDelete(DeleteBehavior.SetNull);
+
+        builder.HasOne(contract => contract.NoticeDeadlineConfirmedBy)
+            .WithMany()
+            .HasForeignKey(contract => contract.NoticeDeadlineConfirmedByUserId)
+            .OnDelete(DeleteBehavior.NoAction);
+
+        // The agreement or amendment the confirmed date was read from. NoAction because
+        // SQL Server rejects a second cascade path into Documents, and because a document
+        // being archived must not quietly detach the provenance of a confirmed deadline.
+        builder.HasOne(contract => contract.NoticeDeadlineSourceDocument)
+            .WithMany()
+            .HasForeignKey(contract => contract.NoticeDeadlineSourceDocumentId)
+            .OnDelete(DeleteBehavior.NoAction);
 
         builder.HasIndex(contract => new { contract.VendorId, contract.ContractNumber })
             .IsUnique()
