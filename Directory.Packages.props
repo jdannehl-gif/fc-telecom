@@ -127,7 +127,7 @@
 
   <ItemGroup Label="Data formats">
     <PackageVersion Include="ClosedXML" Version="0.104.2" />
-    <PackageVersion Include="CsvHelper" Version="33.0.1" />
+    <PackageVersion Include="CsvHelper" Version="33.1.0" />
   </ItemGroup>
 
   <ItemGroup Label="Testing">
