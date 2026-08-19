@@ -197,9 +197,21 @@ jobs:
 
   security-scan:
     runs-on: ubuntu-latest
+
+    # Job-level permissions REPLACE the workflow-level block above rather than adding to it,
+    # so everything this job needs has to be listed here.
+    #
+    # actions: read is the one that is easy to miss. CodeQL's analyze step builds a diff range
+    # for diff-informed analysis, which calls GET /repos/{owner}/{repo}/actions/runs/{run_id},
+    # and that endpoint requires the Actions read permission. Without it the scan itself
+    # succeeds — it reported "CodeQL scanned 60 out of 60 C# files" and wrote the SARIF — and
+    # then the job fails at the reporting step with "Resource not accessible by integration".
+    # A failure after the work is done, for a reason unrelated to the code, is the kind of red
+    # run that teaches people to ignore red.
     permissions:
       contents: read
       security-events: write
+      actions: read
 
     steps:
       - uses: actions/checkout@v7
