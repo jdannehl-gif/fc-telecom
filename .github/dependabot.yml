@@ -12,21 +12,20 @@ version: 2
 # all constrain each other, so eleven separate PRs would each be individually un-mergeable.
 # One grouped PR per band is reviewable and restores cleanly.
 #
-# ── PAUSED ──────────────────────────────────────────────────────────────────────────────
+# ── History: paused, now re-enabled ──────────────────────────────────────────────────────
 #
-# `open-pull-requests-limit: 0` disables version-update pull requests while leaving the
-# configuration and the grouping in place. GitHub *security* advisories still open PRs; that
-# is the one category worth interrupting for.
+# This file was added while main had never once restored successfully, and it immediately
+# opened six pull requests. Every one ran full CI against a tree that did not build, so six red
+# runs appeared that said nothing about the six proposed upgrades — they simply inherited
+# main's failure. An upgrade bot needs a green baseline to compare a proposed change against;
+# without one it emits noise. It was paused with `open-pull-requests-limit: 0`, which stops
+# version-update PRs while leaving security-advisory PRs flowing.
 #
-# Why: this file was added while main had never once restored successfully, and it immediately
-# opened six pull requests. Every one ran full CI against a tree that does not build, so six
-# red runs appeared that said nothing about the six proposed upgrades — they inherited main's
-# failure. Adding an upgrade bot to an unstable pipeline produces noise, not signal, because
-# there is no green baseline to compare a proposed change against.
+# Restore, build, tests and the security scan now all pass on main, so the limits are back.
+# A red Dependabot PR from here on means "this upgrade breaks us", which is the entire point.
 #
-# Set the nuget limit back to 5 and the actions limit back to the default the day restore,
-# build, tests, and the security scan all pass on main. That is the point at which a red
-# Dependabot PR means "this upgrade breaks us", which is the whole reason to have it.
+# If CI ever goes red on main again for more than a day, set both limits back to 0 rather than
+# letting the bot pile PRs on top of a broken baseline.
 
 updates:
   - package-ecosystem: nuget
@@ -35,8 +34,7 @@ updates:
     schedule:
       interval: weekly
       day: monday
-    # Restore to 5 once main is green. See the PAUSED note above.
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 5
     groups:
       # The whole .NET 10 band, moved together. This is the group that would have caught
       # the 10.0.0 → 10.0.11 gap.
@@ -80,8 +78,6 @@ updates:
     directory: "/"
     schedule:
       interval: monthly
-    # Also paused. Restore to the default (5) alongside the nuget limit above.
-    open-pull-requests-limit: 0
     groups:
       actions:
         patterns:

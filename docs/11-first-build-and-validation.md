@@ -654,3 +654,73 @@ If the build fails on nullable warnings and it is blocking progress, get to gree
 leave the committed setting alone. Two checks that would have caught the common cases have
 already been run and are clean: no `CS8618` (non-nullable property with no `required`,
 initialiser, or `= null!`) and no `CS9035` (unset required property in an object initialiser).
+
+## 11. Green — all four checks pass
+
+`build-and-test`, `code-style`, `security-scan` and `validate-infrastructure` are all passing on
+main. Restore, build, tests and the security scan clear the gate set at baseline approval.
+
+### What the remaining rounds found
+
+Runs five through nine worked through the projects in dependency order — Domain,
+Domain.UnitTests, Application, Infrastructure, Web, Architecture.Tests. Each failure hid every
+project behind it, which is why this took several rounds rather than one.
+
+| Error | Cause | Fix |
+|---|---|---|
+| `CS0246` ×202 | No `using Xunit;` anywhere; `ImplicitUsings` does not include it | `<Using Include="Xunit" />` per test project |
+| `CA1000` | `PagedResult<T>.Empty` — static member on a generic type | Non-generic `PagedResult.Empty<T>()`, same shape as `Task`/`Task<T>` |
+| `CA1707` ×80, `CA1861` ×5 | Test-method naming and inline arrays | Scoped off for `tests/` only, in `.editorconfig`, with reasoning |
+| `CS1061` | `property.SetIsConcurrencyToken(true)` | `IsConcurrencyToken` is a settable property on `IMutableProperty`; `Set*` belongs to `IConventionProperty` |
+| `CS8767`, `CA1725` | `TryDestructure` dropped `[NotNullWhen(true)]` and renamed a parameter | Matched Serilog's `IDestructuringPolicy` exactly |
+| `CS0542` | `@inject DashboardQueries Dashboard` in `Dashboard.razor` | Renamed to `Queries` — a .razor file compiles to a class named after the file |
+| `ASPDEPR005` | `ForwardedHeadersOptions.KnownNetworks` obsolete since ASP.NET Core 9 | `KnownIPNetworks` |
+| `CA1305` | Serilog `.WriteTo.Console()` with no format provider | `InvariantCulture` — logs must be identical whatever the host locale |
+| `CA1873` | Potentially expensive argument in a logging call | Guarded with `logger.IsEnabled`, rule left enabled |
+| `CS1503` | Shouldly's string-collection `ShouldBe(..., Case, string)` overload capturing a positional message | Passed `Case.Sensitive` explicitly |
+
+`security-scan` then failed once for a reason unrelated to the code: CodeQL scanned all 60 files
+and wrote its SARIF, then failed calling `GET /repos/{owner}/{repo}/actions/runs/{run_id}` while
+building its diff range. That endpoint needs the **Actions read** permission. Job-level
+`permissions` *replace* the workflow-level block rather than adding to it, so the job had only
+`contents: read` and `security-events: write`. Added `actions: read`.
+
+### What green does and does not mean
+
+**Does:** the code compiles under warnings-as-errors, the domain unit tests and architecture
+tests execute and pass, no dependency carries a known high or critical advisory, CodeQL analyses
+the whole C# surface, and the Bicep compiles.
+
+**Does not:**
+
+- **Nothing has touched a database.** No migration has been applied, no query has been executed
+  against SQL Server, and the EF model has never been validated at runtime. The unit tests cover
+  pure calculation functions by design.
+- **Nothing has authenticated.** The Entra ID flow, the permission claims enricher and the
+  authorization policies have never run against a real tenant.
+- **No page has rendered.** Blazor components compiling is not the same as them working.
+- **Encryption and Key Vault are unexercised.** The AES-GCM path and the HMAC search index have
+  never had a key.
+
+Section 4 is the checklist for all of that, and it is the remaining condition on the baseline
+approval, which was given "subject to successful compilation, testing, and **Azure validation**".
+Two of those three are now met.
+
+### Housekeeping done at the gate
+
+- **Dependabot re-enabled** — limits restored to 5 and the default now that there is a green
+  baseline to compare against. If main goes red for more than a day, set both back to `0`.
+- Three local pre-push checks live in `tools/`: `check-package-pins.py` (manifest vs nuget.org),
+  `check-external-usings.py` (CS0246 and CS0542), and the static analyser.
+
+### Still outstanding
+
+- `dotnet format` has never been run over this codebase. `code-style` is advisory for that
+  reason and annotates rather than fails. Run it once, commit, then make the job blocking —
+  there is a TODO on the job saying so.
+- Two upgrades deferred deliberately so a major-version change would not be mixed into a build
+  that had never succeeded: `Microsoft.Identity.Web` 3.8.2 → 4.x, and
+  `Microsoft.Extensions.Http.Resilience` 9.3.0 → 10.x.
+- `azure/webapps-deploy` and `Azure/functions-action` tags are unverified; confirm before the
+  first production deploy.
+- The SQL Server service container and integration tests (backlog N-05).
