@@ -1,0 +1,29 @@
+@using System.Net.Http
+@using System.Globalization
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.AspNetCore.Components.Routing
+@using Microsoft.AspNetCore.Components.Web
+@* Required for the bare `@rendermode InteractiveServer` syntax used on interactive pages. *@
+@using static Microsoft.AspNetCore.Components.Web.RenderMode
+@using Microsoft.JSInterop
+@using FcTelecom.Application.Abstractions
+@using FcTelecom.Application.Authorization
+@using FcTelecom.Application.Common
+@using FcTelecom.Application.Dashboard
+@using FcTelecom.Application.Organization
+@using FcTelecom.Application.Platform
+@using FcTelecom.Application.Services
+@using FcTelecom.Application.Vendors
+@using FcTelecom.Domain.Calculations
+@using FcTelecom.Domain.Contracts
+@using FcTelecom.Domain.Monitoring
+@using FcTelecom.Domain.Organization
+@using FcTelecom.Domain.Services
+@using FcTelecom.Domain.Vendors
+@using FcTelecom.Web
+@using FcTelecom.Web.Components
+@using FcTelecom.Web.Components.Layout
+@using FcTelecom.Web.Components.Shared
+@using FcTelecom.Web.Infrastructure

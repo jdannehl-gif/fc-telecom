@@ -1,0 +1,215 @@
+@page "/"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@inject DashboardQueries Dashboard
+
+<PageTitle>Portfolio — FC Telecom Manager</PageTitle>
+
+<h1>Portfolio</h1>
+
+@if (_data is null)
+{
+    <p class="loading">Loading portfolio…</p>
+}
+else
+{
+    <section class="tiles" aria-label="Headline figures">
+        <div class="tile">
+            <span class="tile__value">@_data.ActiveLocationCount</span>
+            <span class="tile__label">Active locations</span>
+        </div>
+        <div class="tile">
+            <span class="tile__value">@_data.ActiveServiceCount</span>
+            <span class="tile__label">Active services</span>
+        </div>
+        @if (_data.MonthlyRecurringSpend is not null)
+        {
+            <div class="tile">
+                <span class="tile__value">@DisplayFormat.Money(_data.MonthlyRecurringSpend, _data.CurrencyCode)</span>
+                <span class="tile__label">Monthly recurring</span>
+            </div>
+            <div class="tile">
+                <span class="tile__value">@DisplayFormat.Money(_data.AnnualizedSpend, _data.CurrencyCode)</span>
+                <span class="tile__label">Annualized run rate</span>
+            </div>
+        }
+    </section>
+
+    @* Every item here links to the filtered list behind it. A dashboard number that
+       cannot be drilled into is a decoration, and people stop trusting decorations. *@
+    @if (_data.NeedsAttention.Count > 0)
+    {
+        <section class="panel panel--attention">
+            <h2>Needs attention</h2>
+            <ul class="attention-list">
+                @foreach (AttentionItemDto item in _data.NeedsAttention)
+                {
+                    <li class="attention attention--@item.Severity.ToString().ToLowerInvariant()">
+                        <span class="attention__icon" aria-hidden="true">@item.Icon</span>
+                        <span class="attention__count">@item.Count</span>
+                        <span class="attention__text">@item.Description</span>
+                        <a class="attention__link" href="@item.FilterUrl">View</a>
+                    </li>
+                }
+            </ul>
+        </section>
+    }
+
+    <div class="panel-row">
+        @if (_data.SpendByCarrier.Count > 0)
+        {
+            <section class="panel">
+                <h2>Spend by carrier</h2>
+                <table class="bar-table">
+                    <caption class="sr-only">Monthly recurring spend by carrier</caption>
+                    <tbody>
+                        @foreach (CarrierSpendDto carrier in _data.SpendByCarrier)
+                        {
+                            <tr>
+                                <th scope="row">@carrier.CarrierName</th>
+                                <td class="bar-cell">
+                                    <span class="bar" style="width:@(BarWidth(carrier.MonthlySpend))%"></span>
+                                </td>
+                                <td class="numeric">@DisplayFormat.Money(carrier.MonthlySpend)</td>
+                                <td class="numeric muted">@carrier.ServiceCount svc</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </section>
+        }
+
+        @if (_data.OverallAvailability is { } overall)
+        {
+            <section class="panel">
+                <h2>Availability — rolling 30 days</h2>
+
+                @* Coverage is shown next to availability, always. 99.94% over 96% coverage
+                   and 99.94% over 40% coverage are completely different statements, and
+                   presenting them identically is a lie of omission. *@
+                <p class="headline-metric">
+                    @DisplayFormat.Percent(overall.AvailabilityPercent)
+                    <span class="headline-metric__qualifier">
+                        over @DisplayFormat.Percent(overall.CoveragePercent, 0) coverage
+                    </span>
+                </p>
+
+                @if (overall.LowConfidence)
+                {
+                    <p class="warning">
+                        ⚠ Low confidence — monitoring covered less than 90% of the period.
+                        Treat this figure as indicative.
+                    </p>
+                }
+
+                <table>
+                    <thead>
+                        <tr><th>Carrier</th><th class="numeric">Availability</th><th class="numeric">Coverage</th><th>SLA</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (CarrierAvailabilityDto carrier in _data.AvailabilityByCarrier)
+                        {
+                            <tr>
+                                <th scope="row">@carrier.CarrierName</th>
+                                <td class="numeric">@DisplayFormat.Percent(carrier.AvailabilityPercent)</td>
+                                <td class="numeric muted">@DisplayFormat.Percent(carrier.CoveragePercent, 0)</td>
+                                <td>
+                                    @if (carrier.SlaTargetPercent is null)
+                                    {
+                                        <span class="muted">no SLA on file</span>
+                                    }
+                                    else if (carrier.BelowSla)
+                                    {
+                                        <span class="badge badge--warn">▼ below @DisplayFormat.Percent(carrier.SlaTargetPercent)</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge badge--ok">meets @DisplayFormat.Percent(carrier.SlaTargetPercent)</span>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </section>
+        }
+    </div>
+
+    @if (_data.RenewalPipeline.Count > 0)
+    {
+        <section class="panel">
+            <h2>Renewal pipeline — next 180 days</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Contract</th><th>Vendor</th><th class="numeric">Services</th>
+                        <th class="numeric">Annual</th><th>Notice by</th><th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (RenewalPipelineItemDto item in _data.RenewalPipeline)
+                    {
+                        <tr>
+                            <th scope="row"><a href="/contracts/@item.ContractId">@item.ContractNumber</a></th>
+                            <td>@item.VendorName</td>
+                            <td class="numeric">@item.ServiceCount</td>
+                            <td class="numeric">@DisplayFormat.Money(item.AnnualValue)</td>
+                            <td>@(item.NoticeDeadline?.ToString("yyyy-MM-dd") ?? "—")</td>
+                            <td>
+                                <span class="badge badge--@UrgencyClass(item.Urgency)" title="@item.Explanation">
+                                    @UrgencyIcon(item.Urgency) @UrgencyLabel(item)
+                                </span>
+                                @if (!item.Confirmed && item.Urgency != RenewalUrgency.TermsUnknown)
+                                {
+                                    <span class="badge badge--warn" title="Computed from the recorded terms, not confirmed against the agreement.">
+                                        needs review
+                                    </span>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </section>
+    }
+}
+
+@code {
+    private PortfolioDashboardDto? _data;
+
+    protected override async Task OnInitializedAsync() => _data = await Dashboard.GetAsync();
+
+    private decimal BarWidth(decimal value)
+    {
+        decimal max = _data?.SpendByCarrier.Count > 0
+            ? _data.SpendByCarrier.Max(carrier => carrier.MonthlySpend)
+            : 0m;
+
+        return max <= 0 ? 0 : Math.Round(value / max * 100m, 1);
+    }
+
+    private static string UrgencyClass(RenewalUrgency urgency) => urgency switch
+    {
+        RenewalUrgency.Urgent => "urgent",
+        RenewalUrgency.Missed => "urgent",
+        RenewalUrgency.TermsUnknown => "unknown",
+        RenewalUrgency.Upcoming => "warn",
+        _ => "ok",
+    };
+
+    private static string UrgencyIcon(RenewalUrgency urgency) => urgency switch
+    {
+        RenewalUrgency.Urgent => "⚠",
+        RenewalUrgency.Missed => "⛔",
+        RenewalUrgency.TermsUnknown => "⛔",
+        RenewalUrgency.Upcoming => "⏰",
+        _ => "○",
+    };
+
+    private static string UrgencyLabel(RenewalPipelineItemDto item) => item.Urgency switch
+    {
+        RenewalUrgency.TermsUnknown => "no terms on file",
+        RenewalUrgency.Missed => $"{Math.Abs(item.DaysAway ?? 0)}d overdue",
+        _ => $"{item.DaysAway}d",
+    };
+}

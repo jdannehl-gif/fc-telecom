@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The Domain project references NOTHING. No EF Core, no Azure SDK, no ASP.NET.
+
+    This emptiness is the point, and FcTelecom.Architecture.Tests fails the build if a
+    reference ever appears here. Everything in Calculations/ is a pure function, which
+    is what makes the availability and spend maths testable against the edge cases that
+    actually occur (partial coverage, overlapping maintenance windows, month boundaries)
+    rather than only against the happy path.
+  -->
+
+  <PropertyGroup>
+    <RootNamespace>FcTelecom.Domain</RootNamespace>
+  </PropertyGroup>
+
+</Project>

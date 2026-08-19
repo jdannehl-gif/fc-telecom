@@ -1,0 +1,92 @@
+@rendermode InteractiveServer
+@inject GlobalSearchService Search
+@inject NavigationManager Navigation
+@implements IDisposable
+
+@* Search across locations, circuit IDs, account numbers, carriers, phone numbers,
+   contract numbers, and — for those authorised — static IP blocks.
+
+   Results are scoped at the query, not filtered here. Someone without Costs.Read who
+   searches an invoice number gets nothing back, rather than a row they cannot open:
+   "access denied" confirms the record exists, which is information they did not have. *@
+
+<div class="search">
+    <input type="search"
+           class="search__input"
+           placeholder="Search circuits, locations, IPs, accounts…"
+           aria-label="Global search"
+           @bind="_term"
+           @bind:event="oninput"
+           @onkeydown="OnKeyDownAsync" />
+
+    @if (_results.Count > 0)
+    {
+        <ul class="search__results">
+            @foreach (SearchResult result in _results)
+            {
+                <li>
+                    <a href="@result.Url" @onclick="Clear">
+                        <span class="search__kind">@result.MatchedOn</span>
+                        <span class="search__title">@result.Title</span>
+                        <span class="search__subtitle">@result.Subtitle</span>
+                    </a>
+                </li>
+            }
+        </ul>
+    }
+    else if (_searched && !string.IsNullOrWhiteSpace(_term))
+    {
+        <ul class="search__results">
+            <li class="search__none">No matches you have access to.</li>
+        </ul>
+    }
+</div>
+
+@code {
+    private string _term = string.Empty;
+    private IReadOnlyList<SearchResult> _results = [];
+    private bool _searched;
+    private CancellationTokenSource? _debounce;
+
+    private async Task OnKeyDownAsync(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape")
+        {
+            Clear();
+            return;
+        }
+
+        // Debounce, because this fires on every keystroke and each search hits six tables.
+        // 250ms is short enough to feel instant and long enough that typing "ORD/KFGS"
+        // is one query rather than eight.
+        _debounce?.Cancel();
+        _debounce?.Dispose();
+        _debounce = new CancellationTokenSource();
+        CancellationToken token = _debounce.Token;
+
+        try
+        {
+            await Task.Delay(250, token);
+            _results = await Search.SearchAsync(_term, token);
+            _searched = true;
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException)
+        {
+            // Superseded by a later keystroke. Expected, not an error.
+        }
+    }
+
+    private void Clear()
+    {
+        _term = string.Empty;
+        _results = [];
+        _searched = false;
+    }
+
+    public void Dispose()
+    {
+        _debounce?.Cancel();
+        _debounce?.Dispose();
+    }
+}
