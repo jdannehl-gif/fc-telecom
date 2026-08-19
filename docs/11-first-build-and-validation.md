@@ -30,7 +30,7 @@ analysis pass that approximates the checks a compiler would make.
 | Every page route carries an explicit authorization policy | 9 / 9 |
 | Computed properties EF would silently map as columns | 1 found, ignored explicitly |
 
-### Not verified, and cannot be here
+### Not verified statically (section 6 records what CI then found)
 
 - Compilation. Overload resolution, generic inference, nullability warnings-as-errors.
 - Package versions in `Directory.Packages.props`. These are pinned to what was current at
@@ -246,3 +246,144 @@ Stated so they are decisions rather than surprises.
 | IT Glue client not implemented | Mapping and validation done | Phase 4 |
 | Seeded audit entries have a null actor | Startup seeding runs outside a request, so there is no signed-in user to attribute to | Cosmetic; a `SystemCurrentUser` swap during seeding would fix it |
 | No regional/row-level data segregation | Every authorised user sees the whole portfolio | Deliberate — see the threat model |
+
+---
+
+## 6. First real CI run — run 32284423125, and what it found
+
+The static pass could not check restore. The first CI run did, and it failed both code jobs
+at the restore step. Both failures were real; neither was a flake.
+
+### Root cause A — NU1010, missing `PackageVersion` entries (`build-and-test`)
+
+```
+src/FcTelecom.Application/FcTelecom.Application.csproj : error NU1010:
+  The following PackageReference items do not define a corresponding PackageVersion item:
+  Microsoft.Extensions.DependencyInjection.Abstractions,
+  Microsoft.Extensions.Logging.Abstractions,
+  Microsoft.Extensions.Options.
+```
+
+Central Package Management requires a `PackageVersion` for every `PackageReference`.
+`FcTelecom.Application` referenced three packages that were never added to
+`Directory.Packages.props`. A failed project restore then took the whole solution restore
+down.
+
+**Fixed by:** adding `PackageVersion` entries for the two packages the project actually
+uses (`…DependencyInjection.Abstractions`, `…Logging.Abstractions`, both `10.0.0`), and
+**removing** the `PackageReference` for `Microsoft.Extensions.Options` and
+`FluentValidation` — neither is used anywhere in the project. Their central versions stay
+declared so re-adding a reference is one line.
+
+> The `NuGet.targets(198,5): error : Object reference not set to an instance of an object`
+> is a **cascade**, not a cause. NuGet's solution-level restore throws an NRE once a project
+> restore has already failed. Chasing it leads nowhere.
+
+### Root cause B — NU1903, a genuinely vulnerable transitive dependency (`security-scan`)
+
+```
+src/FcTelecom.Infrastructure/FcTelecom.Infrastructure.csproj : error NU1903:
+  Warning As Error: Package 'System.Security.Cryptography.Xml' 9.0.0
+  has a known high severity vulnerability   (× 8 advisories)
+```
+
+This is not a configuration problem — it is the audit doing its job. `TreatWarningsAsErrors`
+turns NuGet Audit's NU1903 into a build break, which is the intended behaviour.
+
+Two of the eight advisories, checked directly:
+
+| Advisory | CVE | Severity | First patched (10.0 band) |
+|---|---|---|---|
+| GHSA-23rf-6693-g89p | — | High, CVSS 7.5 | 10.0.10 |
+| GHSA-w3x6-4m5h-cxqf | CVE-2026-26171 | High, CVSS 7.5 | 10.0.6 |
+| GHSA-mmjf-rqrv-855v | CVE-2026-50527 | High, CVSS 7.5 | 10.0.10 |
+
+All are uncontrolled resource consumption in `EncryptedXml` — denial of service from crafted
+encrypted XML. The highest first-patched version in the 10.0 band is **10.0.10**, so one pin
+clears all of them.
+
+**Fixed by:** a transitive pin in `Directory.Packages.props`. It arrives as someone else's
+dependency, so there is no direct reference to bump —
+`CentralPackageTransitivePinningEnabled` (already on) makes a `PackageVersion` entry
+override whatever version the graph asks for:
+
+```xml
+<PackageVersion Include="System.Security.Cryptography.Xml" Version="10.0.10" />
+```
+
+The audit was **not** suppressed, and `TreatWarningsAsErrors` stays on. If the 10.0 band is
+ever unavailable, `9.0.18` is the equivalent patched version in the 9.0 band.
+
+**This pin should not live forever.** When whichever package pulls it in ships a build that
+already depends on a patched version, delete the line.
+`dotnet nuget why src/FcTelecom.Infrastructure System.Security.Cryptography.Xml` names the source.
+
+### If a future advisory has no patched version yet
+
+Do not reach for `TreatWarningsAsErrors=false` — that disables every other warning too.
+Suppress the single advisory, narrowly and with an expiry note:
+
+```xml
+<!-- Expires when Foo 2.1 ships; tracked in <issue>. Reassess by <date>. -->
+<NoWarn>$(NoWarn);NU1903</NoWarn>
+```
+
+Better still, scope it to the one project that pulls it in rather than the whole solution.
+
+### Root cause C — no test results uploaded
+
+Reported as "no files were found under ./TestResults". The immediate cause was that the
+build failed so tests never ran, but there was a **latent bug** underneath it:
+
+`--logger "trx;LogFileName=results.trx"` gives every test project in the solution the same
+output filename. The last project to finish silently overwrites the rest, so a green run
+would have reported a fraction of the tests it actually executed.
+
+**Fixed by:** `--logger trx` with no fixed filename (the logger then names each file per
+assembly), a single `TEST_RESULTS_DIR` used by both the test and upload steps so they cannot
+drift apart, and `if-no-files-found: ignore` on the upload so a genuinely empty directory
+after an earlier failure does not add noise to the annotations.
+
+### Root cause D — Node 20 deprecation warnings
+
+| Action | Was | Now |
+|---|---|---|
+| `actions/checkout` | v4 (node20) | **v7** |
+| `actions/setup-dotnet` | v4 (node20) | **v5** — the release that moved to node24 |
+| `actions/upload-artifact` | v4 (node20) | **v7** |
+| `github/codeql-action/*` | v3 | **v4** |
+| `azure/login` | v2 | **v3** |
+
+`azure/webapps-deploy` and `Azure/functions-action` are **deliberately unchanged**. Their
+READMEs currently document v2 and v1 and state no Node runtime, so bumping them would be a
+guess. They live only in the manual-only Deploy workflow, which does not run in CI, so they
+gate nothing. Confirm the tags before the first production deploy.
+
+### Also changed while in there
+
+- **Deploy is manual-only.** `cd.yml` had a `push: branches: [main]` trigger alongside
+  `workflow_dispatch`, which meant every merge to main would have deployed. Removed.
+- **`code-style` is its own non-blocking job.** `dotnet format --verify-no-changes` has never
+  been run over this codebase and will report differences. It is advisory so a whitespace
+  diff cannot mask a build or test failure. Run `dotnet format` once, commit, then fold it
+  back in as blocking — there is a TODO on the job saying exactly that.
+- **The SQL service container is commented out.** No current test project touches a database,
+  so it was spending ~33 s per run and adding a health-check flake for nothing. Restore it
+  verbatim with `FcTelecom.Integration.Tests`.
+- **Dead workflow references removed.** `cd.yml` published `src/FcTelecom.Worker`, which does
+  not exist yet, and read a step output that was never set. `azure-pipelines.yml` referenced
+  a `steps/deploy.yml` template that was never written.
+- Two genuinely unused `using` directives removed from `Program.cs`; `IDE0005` pinned to
+  `suggestion` so enabling documentation files later cannot silently start breaking the build.
+
+## 7. What the next run will exercise for the first time
+
+Restore was the only gate reached so far. Passing it means **`dotnet build` runs against this
+code for the first time ever** — that is where any remaining compile errors will surface, and
+`TreatWarningsAsErrors` is on by design.
+
+If the build fails on nullable warnings and it is blocking progress, get to green with
+`dotnet build -p:TreatWarningsAsErrors=false` **locally** to see the full list, fix them, and
+leave the committed setting alone. Two checks that would have caught the common cases have
+already been run and are clean: no `CS8618` (non-nullable property with no `required`,
+initialiser, or `= null!`) and no `CS9035` (unset required property in an object initialiser).

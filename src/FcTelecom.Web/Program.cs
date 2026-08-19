@@ -1,9 +1,7 @@
 using System.Security.Claims;
 using FcTelecom.Application;
 using FcTelecom.Application.Abstractions;
-using FcTelecom.Application.Authorization;
 using FcTelecom.Infrastructure;
-using FcTelecom.Infrastructure.Persistence;
 using FcTelecom.Infrastructure.Persistence.Seed;
 using FcTelecom.Web.Authorization;
 using FcTelecom.Web.Components;

@@ -1,5 +1,10 @@
 name: Deploy
 
+# MANUAL ONLY.
+#
+# There is deliberately no `push` trigger. An earlier version of this file had one on main,
+# which contradicted the intent — every merge would have deployed. Deployment is an explicit,
+# attributable act: someone chooses the environment and their name is on the run.
 on:
   workflow_dispatch:
     inputs:
@@ -9,8 +14,6 @@ on:
         default: dev
         type: choice
         options: [dev, prod]
-  push:
-    branches: [main]
 
 permissions:
   contents: read
@@ -20,21 +23,24 @@ permissions:
 
 env:
   DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment || 'dev' }}
+    # The prod environment carries a manual approval check, configured on the environment
+    # in GitHub rather than here — approvals belong to the environment, not the YAML.
+    environment: ${{ inputs.environment }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
 
       - name: Azure login
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -49,17 +55,16 @@ jobs:
           az deployment group what-if
           --resource-group ${{ vars.AZURE_RESOURCE_GROUP }}
           --template-file infra/main.bicep
-          --parameters infra/main.${{ inputs.environment || 'dev' }}.bicepparam
+          --parameters infra/main.${{ inputs.environment }}.bicepparam
 
       - name: Apply infrastructure
-        id: infra
-        run: >-
-          az deployment group create
-          --resource-group ${{ vars.AZURE_RESOURCE_GROUP }}
-          --template-file infra/main.bicep
-          --parameters infra/main.${{ inputs.environment || 'dev' }}.bicepparam
-          --query properties.outputs -o json > outputs.json
-          && cat outputs.json
+        run: |
+          az deployment group create \
+            --resource-group ${{ vars.AZURE_RESOURCE_GROUP }} \
+            --template-file infra/main.bicep \
+            --parameters infra/main.${{ inputs.environment }}.bicepparam \
+            --query properties.outputs -o json > outputs.json
+          cat outputs.json
 
       # ── 2. Database migrations ───────────────────────────────────────────────────
       #
@@ -91,17 +96,25 @@ jobs:
       - name: Publish web
         run: dotnet publish src/FcTelecom.Web -c Release -o ./publish/web
 
-      - name: Publish worker
-        run: dotnet publish src/FcTelecom.Worker -c Release -o ./publish/worker
-
-      - name: Deploy functions
-        uses: azure/functions-action@v1
-        with:
-          app-name: ${{ fromJson(steps.infra.outputs.stdout || '{}').functionAppName.value || vars.FUNCTION_APP_NAME }}
-          package: ./publish/worker
+      # NOTE: FcTelecom.Worker is not in the solution yet (Phase 2). Re-enable this and the
+      # functions deploy below when it lands.
+      # - name: Publish worker
+      #   run: dotnet publish src/FcTelecom.Worker -c Release -o ./publish/worker
+      #
+      # - name: Deploy functions
+      #   uses: Azure/functions-action@v1
+      #   with:
+      #     app-name: ${{ vars.FUNCTION_APP_NAME }}
+      #     package: ./publish/worker
 
       # Production goes to the staging slot, gets smoke-tested, then swaps. Rollback is a
       # swap back — seconds, not a redeploy.
+      #
+      # NOTE: azure/webapps-deploy and Azure/functions-action are not verified against the
+      # Node 24 runner requirement — their READMEs currently document v2 and v1 respectively
+      # and do not state a Node runtime. They are left at known-good tags rather than bumped
+      # on a guess. This workflow is manual-only and does not run in CI, so a deprecation
+      # warning here does not gate anything; confirm the tags before the first prod deploy.
       - name: Deploy web to staging slot
         if: inputs.environment == 'prod'
         uses: azure/webapps-deploy@v3

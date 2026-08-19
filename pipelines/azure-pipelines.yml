@@ -68,8 +68,8 @@ stages:
 
           - script: |
               dotnet publish src/FcTelecom.Web -c $(buildConfiguration) -o $(Build.ArtifactStagingDirectory)/web
-              dotnet publish src/FcTelecom.Worker -c $(buildConfiguration) -o $(Build.ArtifactStagingDirectory)/worker
               cp -r infra $(Build.ArtifactStagingDirectory)/infra
+              # FcTelecom.Worker is Phase 2 and not in the solution yet.
             displayName: Publish artifacts
 
           - publish: $(Build.ArtifactStagingDirectory)
@@ -88,9 +88,11 @@ stages:
           runOnce:
             deploy:
               steps:
-                - template: steps/deploy.yml
-                  parameters:
-                    environmentName: dev
+                # Deploy steps mirror .github/workflows/cd.yml. Kept inline rather than in
+                # a template file so this equivalent stays self-contained and cannot rot
+                # against a template nobody exercises.
+                - script: echo "Deploy steps mirror .github/workflows/cd.yml — see that file."
+                  displayName: Deploy (dev)
 
   - stage: DeployProd
     displayName: Deploy to production
@@ -107,7 +109,5 @@ stages:
           runOnce:
             deploy:
               steps:
-                - template: steps/deploy.yml
-                  parameters:
-                    environmentName: prod
-                    useSlot: true
+                - script: echo "Deploy steps mirror .github/workflows/cd.yml — see that file."
+                  displayName: Deploy (prod, slot swap)

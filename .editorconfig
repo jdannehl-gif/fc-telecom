@@ -43,6 +43,12 @@ dotnet_diagnostic.CA3003.severity = error         # File path injection
 dotnet_diagnostic.CA3075.severity = error         # Insecure DTD processing
 dotnet_diagnostic.IDE0055.severity = suggestion   # Formatting: advisory, not a build break
 
+# IDE0005 (unnecessary using directive) only reports during build when
+# GenerateDocumentationFile is true, which it is not here. Pinned to suggestion so the
+# behaviour is explicit rather than an accident of that setting — otherwise turning doc
+# files on later would silently start failing the build on warnings-as-errors.
+dotnet_diagnostic.IDE0005.severity = suggestion
+
 # Naming
 dotnet_naming_rule.private_fields_underscore.severity = warning
 dotnet_naming_rule.private_fields_underscore.symbols = private_fields

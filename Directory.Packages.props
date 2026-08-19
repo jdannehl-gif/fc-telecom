@@ -54,6 +54,39 @@
     <PackageVersion Include="Microsoft.Azure.Functions.Worker.ApplicationInsights" Version="2.0.0" />
   </ItemGroup>
 
+  <ItemGroup Label="Extensions primitives">
+    <!--
+      Referenced explicitly by FcTelecom.Application, which is a plain class library and so
+      does not get these from a shared framework the way the Web project does. Under Central
+      Package Management every PackageReference needs a matching PackageVersion here — a
+      missing one is NU1010 and fails restore for the whole solution, which is exactly what
+      happened on the first CI run.
+    -->
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.0" />
+  </ItemGroup>
+
+  <ItemGroup Label="Transitive security pins">
+    <!--
+      Pinned, not referenced. CentralPackageTransitivePinningEnabled (set above) makes a
+      PackageVersion here override whatever version a transitive dependency asks for.
+
+      System.Security.Cryptography.Xml resolved to 9.0.0, which carries eight high-severity
+      advisories (CVE-2026-26171 and CVE-2026-50527 among them — uncontrolled resource
+      consumption in EncryptedXml). NuGet Audit raises those as NU1903, and because
+      TreatWarningsAsErrors is on they fail restore. That is the system working as intended.
+
+      10.0.10 is the first patched version in the 10.0 band across all of those advisories
+      (the 9.0-band equivalent is 9.0.18, if a downgrade is ever needed).
+
+      This is a pin, so it should be revisited rather than left forever: when the package
+      that pulls this in ships a build that already depends on a patched version, remove the
+      line. `dotnet nuget why <project> System.Security.Cryptography.Xml` names the source.
+    -->
+    <PackageVersion Include="System.Security.Cryptography.Xml" Version="10.0.10" />
+  </ItemGroup>
+
   <ItemGroup Label="Cross-cutting">
     <PackageVersion Include="Serilog.AspNetCore" Version="9.0.0" />
     <PackageVersion Include="Serilog.Sinks.ApplicationInsights" Version="4.0.0" />

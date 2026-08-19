@@ -21,12 +21,15 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!--
+      Only what is actually used. FluentValidation and Microsoft.Extensions.Options were
+      referenced here in anticipation of validators and options that were never written;
+      they are removed rather than versioned. Their PackageVersion entries stay declared
+      centrally so re-adding a reference is a one-line change.
+    -->
     <PackageReference Include="Microsoft.EntityFrameworkCore" />
-    <PackageReference Include="FluentValidation" />
-    <PackageReference Include="FluentValidation.DependencyInjectionExtensions" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
-    <PackageReference Include="Microsoft.Extensions.Options" />
   </ItemGroup>
 
 </Project>
