@@ -131,7 +131,11 @@ public sealed class ApplicationDbContext(DbContextOptions<ApplicationDbContext> 
                 continue;
             }
 
-            property.SetIsConcurrencyToken(true);
+            // IsConcurrencyToken is a settable property on IMutableProperty, not a
+            // SetIsConcurrencyToken() method. The Set* form exists on IConventionProperty,
+            // which is the API surface for custom conventions and carries a configuration
+            // source; the IMutable* surface used here sets values directly.
+            property.IsConcurrencyToken = true;
             property.ValueGenerated = Microsoft.EntityFrameworkCore.Metadata.ValueGenerated.OnAddOrUpdate;
             property.SetColumnType("rowversion");
         }

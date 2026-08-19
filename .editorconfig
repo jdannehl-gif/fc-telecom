@@ -51,9 +51,35 @@ dotnet_diagnostic.IDE0005.severity = suggestion
 
 # Naming
 dotnet_naming_rule.private_fields_underscore.severity = warning
+
 dotnet_naming_rule.private_fields_underscore.symbols = private_fields
 dotnet_naming_rule.private_fields_underscore.style = underscore_camel_case
 dotnet_naming_symbols.private_fields.applicable_kinds = field
 dotnet_naming_symbols.private_fields.applicable_accessibilities = private
 dotnet_naming_style.underscore_camel_case.required_prefix = _
 dotnet_naming_style.underscore_camel_case.capitalization = camel_case
+
+# ── Test projects ───────────────────────────────────────────────────────────────────────
+#
+# Scoped to tests/ deliberately. These two rules are correct for library code and wrong for
+# test code, and the distinction is the file's location, not a judgement about the rule.
+[tests/**.cs]
+
+# CA1707 — no underscores in member names.
+#
+# The rule exists to keep PUBLIC API names conventional. A test method is not public API:
+# nobody calls it, and its name is the failure message. `UnknownTime_IsExcludedFromThe
+# Denominator_NotCountedAsUp` tells whoever is reading a red CI run what broke;
+# `UnknownTimeIsExcludedFromTheDenominatorNotCountedAsUp` does not.
+#
+# Method_Scenario_Expectation is the near-universal .NET convention, and roughly 80 test
+# names here follow it. Renaming them to satisfy a public-API rule would trade real
+# diagnostic value for nothing.
+dotnet_diagnostic.CA1707.severity = none
+
+# CA1861 — prefer static readonly fields over constant array arguments.
+#
+# A real allocation concern on a hot path. In a test, the inline `[180, 120, 90, 60, 30]`
+# next to the assertion is the point: hoisting it to a field at the top of the class moves
+# the data away from the case that depends on it, and the allocation happens once per test.
+dotnet_diagnostic.CA1861.severity = none
