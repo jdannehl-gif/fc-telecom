@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Reflection;
 using System.Threading.RateLimiting;
@@ -145,8 +146,13 @@ public sealed class SensitiveDataDestructuringPolicy : IDestructuringPolicy
         "EncryptionKeyBase64", "SearchHashKeyBase64", "PayloadJson", "ConnectionString",
     };
 
+    // [NotNullWhen(true)] is not decoration — Serilog's IDestructuringPolicy declares it on
+    // this parameter, and an implementation that omits it is making a weaker promise than the
+    // interface (CS8767). It is also true: every `return true` below assigns result first.
     public bool TryDestructure(
-        object value, ILogEventPropertyValueFactory factory, out LogEventPropertyValue? result)
+        object value,
+        ILogEventPropertyValueFactory factory,
+        [NotNullWhen(true)] out LogEventPropertyValue? result)
     {
         ArgumentNullException.ThrowIfNull(value);
         ArgumentNullException.ThrowIfNull(factory);

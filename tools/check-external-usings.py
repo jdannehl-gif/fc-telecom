@@ -134,4 +134,41 @@ if findings:
 else:
     print("Every well-known external symbol has its namespace in scope.")
 
-sys.exit(1 if findings else 0)
+# ── CS0542: a .razor member with the same name as its file ──────────────────────────────
+#
+# A .razor file compiles to a class named after the file, so `@inject DashboardQueries
+# Dashboard` inside Dashboard.razor declares a member with the same name as its enclosing
+# type. The generated-code indirection makes the compiler error read oddly, which is what
+# makes this worth a check rather than a code review.
+razor_findings = []
+
+for path in sorted(ROOT.rglob("*.razor")):
+    rel = path.relative_to(ROOT)
+    if "obj/" in str(rel) or "bin/" in str(rel):
+        continue
+
+    stem = path.stem
+    body = path.read_text(encoding="utf-8")
+
+    for m in re.finditer(r'^@inject\s+\S+\s+(\w+)', body, re.MULTILINE):
+        if m.group(1) == stem:
+            razor_findings.append(
+                f"  {rel}: injected member '{m.group(1)}' has the same name as its component")
+
+    code = re.search(r'@code\s*\{(.*)\}', body, re.DOTALL)
+    if code:
+        for m in re.finditer(
+                r'^\s*(?:private|public|protected|internal)\s+[\w<>\?\[\],\.]+\s+(\w+)\s*[;={(]',
+                code.group(1), re.MULTILINE):
+            if m.group(1) == stem:
+                razor_findings.append(
+                    f"  {rel}: member '{m.group(1)}' has the same name as its component")
+
+print()
+if razor_findings:
+    print(f"CS0542 RISK — {len(razor_findings)} finding(s):\n")
+    print("\n".join(razor_findings))
+else:
+    print("No .razor component declares a member named after itself.")
+
+sys.exit(1 if (findings or razor_findings) else 0)

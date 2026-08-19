@@ -1,7 +1,10 @@
 @page "/"
 @rendermode InteractiveServer
 @attribute [Authorize]
-@inject DashboardQueries Dashboard
+@* Named Queries, not Dashboard. A .razor file compiles to a class named after the file, so
+   an injected member called Dashboard inside Dashboard.razor is a member with the same name
+   as its enclosing type — CS0542. *@
+@inject DashboardQueries Queries
 
 <PageTitle>Portfolio — FC Telecom Manager</PageTitle>
 
@@ -177,7 +180,7 @@ else
 @code {
     private PortfolioDashboardDto? _data;
 
-    protected override async Task OnInitializedAsync() => _data = await Dashboard.GetAsync();
+    protected override async Task OnInitializedAsync() => _data = await Queries.GetAsync();
 
     private decimal BarWidth(decimal value)
     {
