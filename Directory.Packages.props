@@ -4,16 +4,27 @@
     Central package management. Versions are declared once, here. Individual .csproj
     files reference packages WITHOUT a Version attribute.
 
-    Why: the failure mode this prevents is two projects resolving different EF Core
-    versions, so a migration behaves one way in the integration tests and another way
-    in production. That bug costs a day to find and five seconds to prevent.
+    TWO RULES, both learned the hard way on CI:
 
-    Package choices worth explaining:
-      - No MediatR. It moved to a commercial licence; plain injected application
-        services do the same job here with one fewer dependency and one fewer licence
-        conversation.
-      - Shouldly, not FluentAssertions, for the same reason.
-      - ClosedXML (MIT) for Excel. No Office interop, no licensing question.
+    1. Every PackageReference needs a PackageVersion here. A missing one is NU1010 and
+       fails restore for the entire solution, not just the offending project.
+
+    2. Declare ONLY packages that a project actually references, plus deliberate security
+       pins in the section at the bottom.
+
+       Rule 2 is the non-obvious one. CentralPackageTransitivePinningEnabled (below) means
+       every entry here is a hard pin, including on packages nothing referenced. An entry
+       left over from a future phase then sits as a stale version floor, and the moment
+       something in the dependency graph needs a higher version you get NU1109
+       "Detected package downgrade" — a restore failure caused entirely by a package
+       nobody uses.
+
+       That is exactly what happened: Azure.Identity was pinned at 1.13.2 while
+       Microsoft.Data.SqlClient 6.1.1 (via EF Core SqlServer and the SQL health check)
+       requires >= 1.14.2. Twenty other speculative entries were removed at the same time
+       to stop the same failure recurring one package at a time.
+
+       Adding a package back is a one-line change at the point it is genuinely needed.
   -->
 
   <PropertyGroup>
@@ -29,62 +40,38 @@
   </ItemGroup>
 
   <ItemGroup Label="ASP.NET Core and identity">
-    <PackageVersion Include="Microsoft.Identity.Web" Version="3.7.1" />
-    <PackageVersion Include="Microsoft.Identity.Web.UI" Version="3.7.1" />
-    <PackageVersion Include="Microsoft.Identity.Web.MicrosoftGraph" Version="3.7.1" />
-    <PackageVersion Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
+    <!--
+      3.8.2, not 3.7.1. GHSA-rpq8-q44m-2rpg (moderate, CVSS 4.7) affects
+      Microsoft.Identity.Web >= 3.2.0 < 3.8.2 — client secrets and certificate details can
+      reach application logs under some conditions.
+
+      This bump also clears the companion advisory on Microsoft.Identity.Abstractions
+      (affected >= 7.1.0 < 9.0.0) without a separate pin: Identity.Web 3.8.2 depends on
+      Microsoft.Identity.Web.TokenAcquisition 3.8.2, which requires Abstractions >= 9.0.0.
+
+      Deliberately the minimum patched 3.x rather than the current 4.14.2 — a patch-level
+      move inside v3 is API-compatible with what is already written, and a major-version
+      jump is not something to make blind while the build has never compiled. Moving to
+      4.x is worth doing once CI is green and the change can actually be verified.
+    -->
+    <PackageVersion Include="Microsoft.Identity.Web" Version="3.8.2" />
+    <PackageVersion Include="Microsoft.Identity.Web.UI" Version="3.8.2" />
     <PackageVersion Include="Microsoft.AspNetCore.Components.QuickGrid" Version="10.0.0" />
   </ItemGroup>
 
   <ItemGroup Label="Azure">
-    <PackageVersion Include="Azure.Identity" Version="1.13.2" />
+    <!--
+      1.21.0. Must be >= 1.14.2 to satisfy Microsoft.Data.SqlClient 6.1.1, which arrives
+      via both Microsoft.EntityFrameworkCore.SqlServer and AspNetCore.HealthChecks.SqlServer.
+      The previous 1.13.2 pin was below that floor and produced NU1109 on every project
+      that touched SQL.
+
+      Taken to current stable rather than the bare minimum: being conservative about
+      version floors is what caused the failure, and 1.21.0 carries no advisories.
+    -->
+    <PackageVersion Include="Azure.Identity" Version="1.21.0" />
     <PackageVersion Include="Azure.Storage.Blobs" Version="12.23.0" />
-    <PackageVersion Include="Azure.Storage.Queues" Version="12.21.0" />
     <PackageVersion Include="Azure.Security.KeyVault.Secrets" Version="4.7.0" />
-    <PackageVersion Include="Azure.Security.KeyVault.Keys" Version="4.7.0" />
-    <PackageVersion Include="Microsoft.Extensions.Configuration.AzureAppConfiguration" Version="8.1.1" />
-    <PackageVersion Include="Microsoft.Graph" Version="5.68.0" />
-  </ItemGroup>
-
-  <ItemGroup Label="Azure Functions">
-    <PackageVersion Include="Microsoft.Azure.Functions.Worker" Version="2.0.0" />
-    <PackageVersion Include="Microsoft.Azure.Functions.Worker.Sdk" Version="2.0.2" />
-    <PackageVersion Include="Microsoft.Azure.Functions.Worker.Extensions.Timer" Version="4.3.1" />
-    <PackageVersion Include="Microsoft.Azure.Functions.Worker.Extensions.Storage.Queues" Version="5.5.0" />
-    <PackageVersion Include="Microsoft.Azure.Functions.Worker.ApplicationInsights" Version="2.0.0" />
-  </ItemGroup>
-
-  <ItemGroup Label="Extensions primitives">
-    <!--
-      Referenced explicitly by FcTelecom.Application, which is a plain class library and so
-      does not get these from a shared framework the way the Web project does. Under Central
-      Package Management every PackageReference needs a matching PackageVersion here — a
-      missing one is NU1010 and fails restore for the whole solution, which is exactly what
-      happened on the first CI run.
-    -->
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
-    <PackageVersion Include="Microsoft.Extensions.Options" Version="10.0.0" />
-  </ItemGroup>
-
-  <ItemGroup Label="Transitive security pins">
-    <!--
-      Pinned, not referenced. CentralPackageTransitivePinningEnabled (set above) makes a
-      PackageVersion here override whatever version a transitive dependency asks for.
-
-      System.Security.Cryptography.Xml resolved to 9.0.0, which carries eight high-severity
-      advisories (CVE-2026-26171 and CVE-2026-50527 among them — uncontrolled resource
-      consumption in EncryptedXml). NuGet Audit raises those as NU1903, and because
-      TreatWarningsAsErrors is on they fail restore. That is the system working as intended.
-
-      10.0.10 is the first patched version in the 10.0 band across all of those advisories
-      (the 9.0-band equivalent is 9.0.18, if a downgrade is ever needed).
-
-      This is a pin, so it should be revisited rather than left forever: when the package
-      that pulls this in ships a build that already depends on a patched version, remove the
-      line. `dotnet nuget why <project> System.Security.Cryptography.Xml` names the source.
-    -->
-    <PackageVersion Include="System.Security.Cryptography.Xml" Version="10.0.10" />
   </ItemGroup>
 
   <ItemGroup Label="Cross-cutting">
@@ -93,11 +80,16 @@
     <PackageVersion Include="Serilog.Enrichers.Environment" Version="3.0.1" />
     <PackageVersion Include="Microsoft.ApplicationInsights.AspNetCore" Version="2.22.0" />
     <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="9.3.0" />
-    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.0" />
-    <PackageVersion Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="10.0.0" />
     <PackageVersion Include="AspNetCore.HealthChecks.SqlServer" Version="9.0.0" />
-    <PackageVersion Include="FluentValidation" Version="11.11.0" />
-    <PackageVersion Include="FluentValidation.DependencyInjectionExtensions" Version="11.11.0" />
+  </ItemGroup>
+
+  <ItemGroup Label="Extensions primitives">
+    <!--
+      Referenced explicitly by FcTelecom.Application, which is a plain class library and so
+      does not get these from a shared framework the way the Web project does.
+    -->
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
   </ItemGroup>
 
   <ItemGroup Label="Data formats">
@@ -110,12 +102,44 @@
     <PackageVersion Include="xunit" Version="2.9.3" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.0.1" />
     <PackageVersion Include="Shouldly" Version="4.2.1" />
-    <PackageVersion Include="NSubstitute" Version="5.3.0" />
     <PackageVersion Include="NetArchTest.Rules" Version="1.3.2" />
-    <PackageVersion Include="Testcontainers.MsSql" Version="4.1.0" />
-    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.0" />
-    <PackageVersion Include="Microsoft.Playwright" Version="1.49.0" />
     <PackageVersion Include="coverlet.collector" Version="6.0.2" />
   </ItemGroup>
+
+  <ItemGroup Label="Transitive security pins">
+    <!--
+      Pinned, NOT referenced — the one deliberate exception to rule 2 above.
+
+      System.Security.Cryptography.Xml resolved to 9.0.0, which carries eight high-severity
+      advisories (CVE-2026-26171, CVE-2026-50527 and others — uncontrolled resource
+      consumption in EncryptedXml). NuGet Audit raises those as NU1903, and with
+      TreatWarningsAsErrors on they fail restore. That is the audit working as intended.
+
+      10.0.10 is the first patched version in the 10.0 band across all of them
+      (9.0.18 is the 9.0-band equivalent if a downgrade is ever needed).
+
+      Revisit rather than leave forever: when whatever pulls this in ships a build that
+      already depends on a patched version, delete the line.
+      `dotnet nuget why <project> System.Security.Cryptography.Xml` names the source.
+    -->
+    <PackageVersion Include="System.Security.Cryptography.Xml" Version="10.0.10" />
+  </ItemGroup>
+
+  <!--
+    Removed because nothing references them (see rule 2). Re-add alongside the
+    PackageReference that needs them:
+
+      Phase 2 worker    Microsoft.Azure.Functions.Worker{,.Sdk,.ApplicationInsights},
+                        Microsoft.Azure.Functions.Worker.Extensions.{Timer,Storage.Queues},
+                        Microsoft.Extensions.Hosting, Azure.Storage.Queues
+      Phase 2 alerting  Microsoft.Graph, Microsoft.Identity.Web.MicrosoftGraph
+      Validation        FluentValidation, FluentValidation.DependencyInjectionExtensions
+      Integration tests Testcontainers.MsSql, Microsoft.AspNetCore.Mvc.Testing, NSubstitute
+      E2E tests         Microsoft.Playwright
+      Not yet needed    Microsoft.AspNetCore.Authentication.JwtBearer,
+                        Microsoft.Extensions.Diagnostics.HealthChecks,
+                        Microsoft.Extensions.Options, Azure.Security.KeyVault.Keys,
+                        Microsoft.Extensions.Configuration.AzureAppConfiguration
+  -->
 
 </Project>

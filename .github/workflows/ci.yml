@@ -91,11 +91,20 @@ jobs:
     # Advisory, not blocking — deliberately a separate job so a whitespace difference can
     # never mask a real build or test failure.
     #
-    # TODO: once `dotnet format` has been run over the codebase and committed, fold this
-    # back into build-and-test as a blocking step. It is non-blocking only because the
-    # codebase has not yet been formatted by the tool, not because formatting does not matter.
+    # continue-on-error is on the FORMATTING STEP, not on the job. Job-level
+    # continue-on-error still renders the job with a red X in the Actions UI and still
+    # reports as a failed check, so an intentionally-advisory job looked identical to a
+    # broken one — the last run was reported as "three failures" partly because of this.
+    # A job that is permanently red teaches people to ignore red.
+    #
+    # At step level the job finishes green and the formatting difference surfaces as a
+    # warning annotation instead. Restore and setup are still hard failures here: a restore
+    # break is a real break, and it should not hide behind the formatting exemption.
+    #
+    # TODO: once `dotnet format` has been run over the codebase and committed, drop the
+    # continue-on-error and make this blocking. It is advisory only because the codebase has
+    # not yet been formatted by the tool, not because formatting does not matter.
     runs-on: ubuntu-latest
-    continue-on-error: true
 
     steps:
       - uses: actions/checkout@v7
@@ -109,7 +118,14 @@ jobs:
         run: dotnet restore
 
       - name: Verify formatting
+        id: format
+        continue-on-error: true
         run: dotnet format --verify-no-changes --no-restore
+
+      - name: Report formatting differences
+        if: steps.format.outcome == 'failure'
+        run: |
+          echo "::warning title=Formatting::dotnet format reports differences. Advisory for now — run 'dotnet format' locally and commit the result. See the code-style job log for the file list."
 
   security-scan:
     runs-on: ubuntu-latest

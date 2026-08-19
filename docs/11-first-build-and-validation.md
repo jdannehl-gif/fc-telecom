@@ -376,7 +376,88 @@ gate nothing. Confirm the tags before the first production deploy.
 - Two genuinely unused `using` directives removed from `Program.cs`; `IDE0005` pinned to
   `suggestion` so enabling documentation files later cannot silently start breaking the build.
 
-## 7. What the next run will exercise for the first time
+## 7. Second CI run — run 32287377450
+
+Reported as three failures: `build-and-test`, `code-style`, `security-scan`. All three failed
+at **Restore**, on the same two diagnostics — one dependency graph, three jobs reading it.
+`validate-infrastructure` passed, as before.
+
+The previous round's fixes held. `FcTelecom.Infrastructure` now restores, and `NU1010` is
+gone. What surfaced underneath is a single structural problem showing up as two symptoms.
+
+### Root cause A — NU1902, moderate advisory on Microsoft.Identity.Web 3.7.1
+
+**GHSA-rpq8-q44m-2rpg.** Client secrets and certificate details can reach application logs
+under some conditions. CVSS 4.7 (moderate). It affects two packages in the graph:
+
+| Package | Affected range | First patched |
+|---|---|---|
+| `Microsoft.Identity.Web` | `>= 3.2.0, < 3.8.2` | **3.8.2** |
+| `Microsoft.Identity.Abstractions` | `>= 7.1.0, < 9.0.0` | **9.0.0** |
+
+**Fixed by** bumping `Microsoft.Identity.Web` and `Microsoft.Identity.Web.UI` to **3.8.2**.
+One bump clears both: Identity.Web 3.8.2 depends on `Microsoft.Identity.Web.TokenAcquisition`
+3.8.2, which requires `Microsoft.Identity.Abstractions >= 9.0.0`. No separate pin needed, so
+there is no second entry to go stale later.
+
+**3.8.2 rather than the current 4.14.2, deliberately.** A patch-level move inside v3 is
+API-compatible with the authentication code already written. A major-version jump is not
+something to make blind on a codebase that has never compiled — it would mix "did the version
+bump break this" into the first real build's error list. Move to 4.x once CI is green and the
+change can actually be verified.
+
+The advisory was **not** suppressed and `NuGetAuditMode` was not weakened. The vulnerable
+dependency was updated, which is the only fix that changes anything about the running app.
+
+### Root cause B — NU1109, package downgrade on Azure.Identity
+
+`Azure.Identity` was centrally pinned at **1.13.2**. `Microsoft.Data.SqlClient 6.1.1` requires
+`>= 1.14.2`, and it arrives twice — via `Microsoft.EntityFrameworkCore.SqlServer 10.0.0` and
+via `AspNetCore.HealthChecks.SqlServer 9.0.0`. With transitive pinning on, a central pin below
+a transitive floor is a hard restore failure, not a silent upgrade.
+
+**Fixed by** moving to **1.21.0** (current stable, no advisories) rather than the bare minimum
+1.14.2. Being conservative about version floors is precisely what caused the failure.
+
+### The structural cause underneath both
+
+`Directory.Packages.props` had **47** `PackageVersion` entries. Only **26** were referenced by
+any `.csproj`. The other 21 were written ahead of the phases that will need them — Functions
+worker packages, Playwright, Testcontainers, Graph, FluentValidation.
+
+With `CentralPackageTransitivePinningEnabled=true`, an unreferenced entry is not inert. It is a
+hard pin on the transitive graph, so every stale speculative version sits as a floor waiting
+for something to need a higher one. Azure.Identity was the first to fire; fixing them one at a
+time as they surface would have meant a failed CI run per package.
+
+**Fixed by** cutting the manifest to 27 entries — the 26 actually referenced plus the one
+deliberate `System.Security.Cryptography.Xml` security pin. The removed 20 are listed in a
+comment block at the bottom of the file, grouped by the phase that will need them, so re-adding
+one alongside its `PackageReference` is a one-line change.
+
+### Root cause C — code-style reported as a failure
+
+`code-style` failed at Restore for the same two reasons as the other jobs, so it was a real
+failure this time. But it would have rendered red regardless: the job carried job-level
+`continue-on-error: true`, which still shows a red X and still reports a failed check. An
+advisory job that is permanently red is indistinguishable from a broken one, and it trains
+people to skim past red.
+
+**Fixed by** moving `continue-on-error` from the job to the formatting step, with a follow-up
+step that emits a `::warning::` annotation when formatting differs. The job now finishes green
+with a visible annotation. Restore and setup stay hard failures in that job — a restore break
+is a real break and should not hide behind the formatting exemption.
+
+### Files changed this round
+
+| File | Change |
+|---|---|
+| `Directory.Packages.props` | Identity.Web/UI → 3.8.2; Azure.Identity → 1.21.0; 20 unreferenced entries removed; both rules documented inline |
+| `.github/workflows/ci.yml` | `code-style`: `continue-on-error` moved job → step, warning annotation added |
+
+`TreatWarningsAsErrors` is still `true`. Deploy is still manual-only.
+
+## 8. What the next run will exercise for the first time
 
 Restore was the only gate reached so far. Passing it means **`dotnet build` runs against this
 code for the first time ever** — that is where any remaining compile errors will surface, and
