@@ -457,7 +457,101 @@ is a real break and should not hide behind the formatting exemption.
 
 `TreatWarningsAsErrors` is still `true`. Deploy is still manual-only.
 
-## 8. What the next run will exercise for the first time
+## 8. Third CI run — the same failure class, and the rule that ends it
+
+Three jobs failed again, all at Restore, all on **NU1109** — and this time the previous fix
+was part of the cause. That is worth stating plainly rather than presenting it as a fresh
+discovery.
+
+### What actually happened
+
+Every Microsoft package in the 10.0 band was pinned at **10.0.0**. The band had shipped
+through **10.0.11**. Two of those pins were then found to be sitting underneath transitive
+requirements:
+
+```
+FcTelecom.Infrastructure
+  -> Azure.Identity 1.21.0
+    -> Azure.Core 1.53.0
+      -> Microsoft.Extensions.Hosting.Abstractions 10.0.3
+        -> Microsoft.Extensions.Logging.Abstractions >= 10.0.3   [pinned at 10.0.0]
+
+FcTelecom.Infrastructure
+  -> Microsoft.EntityFrameworkCore 10.0.0
+    -> Microsoft.Extensions.Caching.Memory 10.0.0
+      -> Microsoft.Extensions.Options 10.0.3
+        -> Microsoft.Extensions.DependencyInjection.Abstractions >= 10.0.3   [pinned at 10.0.0]
+```
+
+The first chain is the one to own: **taking `Azure.Identity` to 1.21.0 in the previous round
+pulled in `Azure.Core` 1.53.0, which raised the floor on the Extensions primitives.** The fix
+for run two set up the failure for run three. Neither of these two packages is one we chose —
+both are three hops down someone else's dependency list.
+
+### The rule that comes out of it
+
+Runs two and three were the same defect wearing different package names. The unifying
+statement was missing from the manifest, so here it is, now recorded as **rule 3** in
+`Directory.Packages.props`:
+
+> Pin to the **latest patch of the band**, never to the band's `.0`, and move every package in
+> a coordinated band together.
+
+A `.0` pin feels like the conservative choice. Under `CentralPackageTransitivePinningEnabled`
+it is the opposite: it is the **lowest possible floor**, which makes it the value most likely
+to end up underneath somebody else's requirement. Pinning at the newest published patch closes
+the failure class deterministically — nothing in a restored graph can require a version that
+has not been published yet.
+
+### Changes
+
+| Package | Was | Now |
+|---|---|---|
+| `Microsoft.EntityFrameworkCore` | 10.0.0 | **10.0.11** |
+| `Microsoft.EntityFrameworkCore.SqlServer` | 10.0.0 | **10.0.11** |
+| `Microsoft.EntityFrameworkCore.Relational` | 10.0.0 | **10.0.11** |
+| `Microsoft.EntityFrameworkCore.Design` | 10.0.0 | **10.0.11** |
+| `Microsoft.Extensions.DependencyInjection.Abstractions` | 10.0.0 | **10.0.11** |
+| `Microsoft.Extensions.Logging.Abstractions` | 10.0.0 | **10.0.11** |
+| `Microsoft.AspNetCore.Components.QuickGrid` | 10.0.0 | **10.0.11** |
+| `System.Security.Cryptography.Xml` | 10.0.10 | **10.0.11** |
+
+All eight verified as published on nuget.org; 10.0.11 is the newest stable in the band for
+every one of them. The four EF Core packages constrain each other and now move as a set.
+
+The remaining pins were checked and cannot produce NU1109: they are **leaves** in this graph —
+nothing depends on `Serilog.*`, `ClosedXML`, `CsvHelper`, `xunit*`, `Shouldly`,
+`NetArchTest.Rules`, `coverlet.collector`, `Microsoft.NET.Test.Sdk`, `Azure.Storage.Blobs`,
+`Azure.Security.KeyVault.Secrets`, `AspNetCore.HealthChecks.SqlServer`,
+`Microsoft.ApplicationInsights.AspNetCore`, or `Microsoft.Extensions.Http.Resilience`, so no
+transitive requirement can be raised above them. `Azure.Identity` 1.21.0 and
+`Microsoft.Identity.Web` 3.8.2 are the two that *are* depended upon, and both are at the
+newest release of their chosen band.
+
+### Two things added so this stops being discovered by CI
+
+**`tools/check-package-pins.py`** — reads the manifest, asks nuget.org what exists, and reports
+any pin behind the newest patch in its own band, plus any missing or stale entry. Run it before
+pushing. It is deliberately *not* a CI step: the pipeline should not gain a new external
+network dependency while we are still making it deterministic.
+
+**`.github/dependabot.yml`** — weekly NuGet updates grouped so the .NET 10 band moves as one
+pull request (eleven separate PRs would each be individually un-mergeable), Azure/Identity as
+another, test tooling as a third. Major bumps are ignored: `Microsoft.Identity.Web` 3.x → 4.x
+is a reviewed decision, not a Monday-morning merge. GitHub Actions updates monthly.
+
+Three restore failures in a row were all version drift found by a failed pipeline. That is the
+wrong instrument for the job.
+
+### Not changed, deliberately
+
+`Microsoft.Extensions.Http.Resilience` stays at **9.3.0** although 10.9.0 exists, and
+`Microsoft.Identity.Web` stays at **3.8.2** although 4.14.2 exists. Both are leaves and neither
+can cause a downgrade. Moving them is an API-surface change on code that has still never
+compiled, and mixing that into the first real build would make the resulting error list
+ambiguous. Both are worth revisiting the moment CI is green.
+
+## 9. What the next run will exercise for the first time
 
 Restore was the only gate reached so far. Passing it means **`dotnet build` runs against this
 code for the first time ever** — that is where any remaining compile errors will surface, and

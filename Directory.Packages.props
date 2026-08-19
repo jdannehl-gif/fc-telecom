@@ -4,7 +4,7 @@
     Central package management. Versions are declared once, here. Individual .csproj
     files reference packages WITHOUT a Version attribute.
 
-    TWO RULES, both learned the hard way on CI:
+    THREE RULES, all learned the hard way on CI:
 
     1. Every PackageReference needs a PackageVersion here. A missing one is NU1010 and
        fails restore for the entire solution, not just the offending project.
@@ -25,6 +25,30 @@
        to stop the same failure recurring one package at a time.
 
        Adding a package back is a one-line change at the point it is genuinely needed.
+
+    3. Pin to the LATEST PATCH of the band, never to the band's .0 release, and move every
+       package in a coordinated band together.
+
+       Rule 3 is rule 2's twin, and it is what caused the third failed run. Everything in the
+       Microsoft 10.0 band was pinned at 10.0.0 while the band had shipped through 10.0.11.
+       A .0 pin is not "the safe conservative choice" — under transitive pinning it is the
+       lowest possible floor, so it is the value most likely to sit underneath something
+       else's requirement.
+
+       The failure path was three hops and involved no package we chose directly:
+         Azure.Identity 1.21.0
+           -> Azure.Core 1.53.0
+             -> Microsoft.Extensions.Hosting.Abstractions 10.0.3
+               -> Microsoft.Extensions.Logging.Abstractions >= 10.0.3   (pinned here at 10.0.0)
+       and in parallel, Options 10.0.3 pulled Microsoft.Extensions.DependencyInjection
+       .Abstractions >= 10.0.3 against the same 10.0.0 pin.
+
+       Pinning the whole band at the newest published patch closes this deterministically:
+       nothing in a restored graph can require a version that does not exist yet.
+
+       `tools/check-package-pins.py` checks this against nuget.org before you push. Dependabot
+       (.github/dependabot.yml) keeps the band moving so a failed CI run is never how we find
+       out that it drifted.
   -->
 
   <PropertyGroup>
@@ -33,10 +57,14 @@
   </PropertyGroup>
 
   <ItemGroup Label="Entity Framework Core">
-    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.0" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.0" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.0" />
-    <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.0" />
+    <!--
+      All four move together, always. EF Core SqlServer depends on EF Core Relational, which
+      depends on EF Core — mixing patches inside this set is a self-inflicted NU1109.
+    -->
+    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.11" />
   </ItemGroup>
 
   <ItemGroup Label="ASP.NET Core and identity">
@@ -56,7 +84,7 @@
     -->
     <PackageVersion Include="Microsoft.Identity.Web" Version="3.8.2" />
     <PackageVersion Include="Microsoft.Identity.Web.UI" Version="3.8.2" />
-    <PackageVersion Include="Microsoft.AspNetCore.Components.QuickGrid" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.AspNetCore.Components.QuickGrid" Version="10.0.11" />
   </ItemGroup>
 
   <ItemGroup Label="Azure">
@@ -87,9 +115,14 @@
     <!--
       Referenced explicitly by FcTelecom.Application, which is a plain class library and so
       does not get these from a shared framework the way the Web project does.
+
+      These two are the most heavily depended-upon packages in the entire graph — almost
+      everything Microsoft ships sits on top of them. They are therefore the two most likely
+      to be pushed above whatever is pinned here, and they are exactly the two that failed on
+      run three. They move with the rest of the 10.0 band, never independently.
     -->
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
-    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
   </ItemGroup>
 
   <ItemGroup Label="Data formats">
@@ -115,14 +148,16 @@
       consumption in EncryptedXml). NuGet Audit raises those as NU1903, and with
       TreatWarningsAsErrors on they fail restore. That is the audit working as intended.
 
-      10.0.10 is the first patched version in the 10.0 band across all of them
-      (9.0.18 is the 9.0-band equivalent if a downgrade is ever needed).
+      10.0.10 was the first patched version in the 10.0 band across all of them (9.0.18 is
+      the 9.0-band equivalent if a downgrade is ever needed). Pinned at 10.0.11 to stay level
+      with the rest of the band per rule 3 — a lone 10.0.10 here would be the next floor to
+      sit underneath something.
 
       Revisit rather than leave forever: when whatever pulls this in ships a build that
       already depends on a patched version, delete the line.
       `dotnet nuget why <project> System.Security.Cryptography.Xml` names the source.
     -->
-    <PackageVersion Include="System.Security.Cryptography.Xml" Version="10.0.10" />
+    <PackageVersion Include="System.Security.Cryptography.Xml" Version="10.0.11" />
   </ItemGroup>
 
   <!--
