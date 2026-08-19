@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Claims;
 using FcTelecom.Application;
 using FcTelecom.Application.Abstractions;
@@ -26,7 +27,11 @@ builder.Host.UseSerilog((context, services, configuration) => configuration
     .MinimumLevel.Information()
     .MinimumLevel.Override("Microsoft.AspNetCore", LogEventLevel.Warning)
     .MinimumLevel.Override("Microsoft.EntityFrameworkCore.Database.Command", LogEventLevel.Warning)
-    .WriteTo.Console());
+    // InvariantCulture: log output must be greppable and identical whatever locale the host
+    // happens to be configured with. A number formatted with a comma decimal separator on one
+    // App Service instance and a period on another is a genuinely annoying thing to debug
+    // (CA1305).
+    .WriteTo.Console(formatProvider: CultureInfo.InvariantCulture));
 
 builder.Services.AddApplicationInsightsTelemetry();
 
@@ -101,7 +106,11 @@ builder.Services.AddHealthChecks()
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
     options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
-    options.KnownNetworks.Clear();
+
+    // KnownIPNetworks, not KnownNetworks — the latter is obsolete as of ASP.NET Core 9
+    // (ASPDEPR005). It took an IPNetwork type of ASP.NET's own; the replacement takes the
+    // BCL's System.Net.IPNetwork. Clearing it is the same operation either way.
+    options.KnownIPNetworks.Clear();
     options.KnownProxies.Clear();
 });
 

@@ -187,9 +187,17 @@ public sealed class PermissionClaimsEnricher(
 
         claims.AddRange(permissions.Select(permission => new Claim(FcClaimTypes.Permission, permission)));
 
-        logger.LogInformation(
-            "Resolved {Count} permission(s) for {Upn} from {GroupCount} group(s).",
-            permissions.Count, upn, groupIds.Count);
+        // Guarded rather than called unconditionally. CA1873 treats property reads in a
+        // logging call as potentially expensive — it cannot know that Count on a HashSet and
+        // a List are O(1). Here they are, so the guard buys nothing at runtime, but leaving
+        // the rule enabled means it still fires the day someone logs the result of an actual
+        // query. The two lines are worth keeping that.
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "Resolved {Count} permission(s) for {Upn} from {GroupCount} group(s).",
+                permissions.Count, upn, groupIds.Count);
+        }
 
         return claims;
     }

@@ -151,11 +151,11 @@ public sealed class SensitiveDataDestructuringPolicy : IDestructuringPolicy
     // interface (CS8767). It is also true: every `return true` below assigns result first.
     public bool TryDestructure(
         object value,
-        ILogEventPropertyValueFactory factory,
+        ILogEventPropertyValueFactory propertyValueFactory,
         [NotNullWhen(true)] out LogEventPropertyValue? result)
     {
         ArgumentNullException.ThrowIfNull(value);
-        ArgumentNullException.ThrowIfNull(factory);
+        ArgumentNullException.ThrowIfNull(propertyValueFactory);
 
         if (value is not (ServiceIpAssignment or NotificationOutboxMessage))
         {
@@ -170,7 +170,7 @@ public sealed class SensitiveDataDestructuringPolicy : IDestructuringPolicy
                 property.Name,
                 SensitivePropertyNames.Contains(property.Name)
                     ? new ScalarValue("[redacted]")
-                    : factory.CreatePropertyValue(SafeRead(property, value), destructureObjects: false)))
+                    : propertyValueFactory.CreatePropertyValue(SafeRead(property, value), destructureObjects: false)))
             .ToList();
 
         result = new StructureValue(properties, value.GetType().Name);
