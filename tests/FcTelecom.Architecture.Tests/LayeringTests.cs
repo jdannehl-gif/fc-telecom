@@ -198,7 +198,17 @@ public sealed class AuthorizationModelTests
                 .Select(entry => entry.Key)
                 .ToList();
 
-            holders.ShouldBe(new[] { Roles.AppAdministrator },
+            // Case.Sensitive is passed explicitly because Shouldly has a string-collection
+            // overload — ShouldBe(IEnumerable<string>, IEnumerable<string>, Case, string) —
+            // that wins over the generic one here, so the third positional argument was
+            // binding to Case rather than to customMessage (CS1503).
+            //
+            // Sensitive is also what we want. Role names are identifiers matched against
+            // Entra group mappings; "AppAdministrator" and "appadministrator" are not the
+            // same role, and a test that could not tell them apart would be worth less.
+            holders.ShouldBe(
+                new[] { Roles.AppAdministrator },
+                Case.Sensitive,
                 $"{permission} should be held only by AppAdministrator.");
         }
     }
