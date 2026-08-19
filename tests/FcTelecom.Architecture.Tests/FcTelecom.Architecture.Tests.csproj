@@ -6,6 +6,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- See the note in FcTelecom.Domain.UnitTests.csproj. ImplicitUsings does not include Xunit. -->
+    <Using Include="Xunit" />
+    <Using Include="Shouldly" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\FcTelecom.Domain\FcTelecom.Domain.csproj" />
     <ProjectReference Include="..\..\src\FcTelecom.Application\FcTelecom.Application.csproj" />
     <ProjectReference Include="..\..\src\FcTelecom.Infrastructure\FcTelecom.Infrastructure.csproj" />

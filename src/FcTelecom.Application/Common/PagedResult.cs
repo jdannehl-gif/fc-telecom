@@ -9,8 +9,26 @@ public sealed record PagedResult<T>(IReadOnlyList<T> Items, int TotalCount, int 
     public bool HasPrevious => Page > 1;
 
     public bool HasNext => Page < TotalPages;
+}
 
-    public static PagedResult<T> Empty(int pageSize = 50) => new([], 0, 1, pageSize);
+/// <summary>
+/// Factory methods for <see cref="PagedResult{T}"/>.
+/// </summary>
+/// <remarks>
+/// A separate non-generic class because <c>PagedResult&lt;T&gt;.Empty()</c> is a static member
+/// on a generic type (CA1000) — the caller has to name the type argument twice and the compiler
+/// cannot infer it. <c>PagedResult.Empty&lt;T&gt;()</c> reads better and is the same shape as
+/// <c>Task</c> / <c>Task&lt;T&gt;</c> in the BCL.
+/// <para>
+/// <c>Empty</c> exists for the short-circuit case: a query handler that determines the caller
+/// may see nothing returns an empty page rather than throwing, so the list view renders "no
+/// results" instead of an error. Returning <c>null</c> there would push the decision to every
+/// caller.
+/// </para>
+/// </remarks>
+public static class PagedResult
+{
+    public static PagedResult<T> Empty<T>(int pageSize = 50) => new([], 0, 1, pageSize);
 }
 
 public static class QueryableExtensions

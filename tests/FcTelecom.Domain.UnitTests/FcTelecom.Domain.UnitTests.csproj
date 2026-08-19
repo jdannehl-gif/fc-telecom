@@ -6,6 +6,20 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!--
+      ImplicitUsings is on solution-wide, and its .NET-SDK set does NOT include Xunit. Every
+      test file here imported Shouldly and forgot Xunit, so [Fact], [Theory] and [InlineData]
+      resolved to nothing — 200-odd CS0246 errors from one missing line.
+
+      Declared here rather than as `using Xunit;` in each file on purpose: a new test file
+      added next year gets it automatically, and the failure mode when it is missing is
+      unmissable but tells you nothing about the actual cause.
+    -->
+    <Using Include="Xunit" />
+    <Using Include="Shouldly" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\FcTelecom.Domain\FcTelecom.Domain.csproj" />
   </ItemGroup>
 
