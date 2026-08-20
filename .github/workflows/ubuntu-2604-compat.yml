@@ -91,9 +91,10 @@ jobs:
       - name: Help text
         run: bash scripts/bootstrap/ubuntu-26.04.sh --help
 
-      # Every strategy value must at least parse and dry-run. An unknown value must be
-      # rejected with exit 2 rather than silently accepted — a typo in --azure-cli on the
-      # real host should not quietly install nothing.
+      # Every strategy value must dry-run cleanly. --check reports what WOULD be installed;
+      # on a bare image nothing is present, so a clean exit is the correct outcome for all
+      # five. An unknown value must be rejected with exit 2 rather than silently accepted —
+      # a typo in --azure-cli on the real host should not quietly install nothing.
       - name: Argument handling
         run: |
           set -e
@@ -106,6 +107,41 @@ jobs:
             exit 1
           fi
           echo "invalid strategy correctly rejected"
+
+      # The behaviour that matters, asserted rather than assumed: on a release Microsoft has
+      # not published for, `auto` must REPORT the gap and must never reach for the 24.04
+      # (noble) repository. Without this, the day someone "fixes" auto by adding a fallback,
+      # every other step here would still pass.
+      #
+      # If Microsoft publishes a resolute suite, auto legitimately selects apt and the gap
+      # message disappears — so this asserts one of the two valid outcomes, not just one.
+      - name: Assert --azure-cli=auto never falls back to noble
+        run: |
+          out=$(bash scripts/bootstrap/ubuntu-26.04.sh --check --azure-cli=auto 2>&1)
+          echo "$out"
+
+          # Not a bare grep for "noble" — the explanation text says the word, in the course
+          # of saying it will not do this. Look for the substitution itself: an apt source
+          # whose Suites is anything but this host's codename.
+          if echo "$out" | grep -E '^\s*(would run:.*)?Suites:' | grep -qv 'Suites: resolute'; then
+            echo "::error::--azure-cli=auto would write an apt source for a different release."
+            echo "$out" | grep -E 'Suites:'
+            exit 1
+          fi
+
+          if echo "$out" | grep -q 'a resolute azure-cli repository exists'; then
+            echo "::notice::Microsoft has published azure-cli for 26.04 — auto selected apt."
+            echo "Update scripts/bootstrap/README.md: the apt gap is closed."
+            exit 0
+          fi
+
+          if echo "$out" | grep -q 'Azure CLI cannot be installed safely'; then
+            echo "auto correctly reported the gap and offered explicit choices"
+            exit 0
+          fi
+
+          echo "::error::--azure-cli=auto did neither: it neither found a 26.04 repository nor reported the gap."
+          exit 1
 
       # --check needs no root and installs nothing. On a bare image everything is missing, so
       # this is asserting that the script reports cleanly rather than that the host is ready.
@@ -221,7 +257,36 @@ jobs:
       - name: Preflight (non-authenticated portion)
         run: |
           export PATH="$PATH:$HOME/.dotnet/tools"
-          pwsh -NoProfile -File scripts/validate/00-Preflight.ps1 -SkipAzureSignIn
+          set -o pipefail
+          pwsh -NoProfile -File scripts/validate/00-Preflight.ps1 -SkipAzureSignIn \
+            | tee /tmp/preflight.txt
+
+      # The parameter-file placeholder check is the one that earns its keep, and
+      # -SkipAzureSignIn deliberately demotes it to a warning: a fresh clone is SUPPOSED to
+      # carry all-zero object IDs, because real tenant identifiers do not belong in source
+      # control. That demotion is only safe if the check demonstrably still runs — otherwise
+      # the day it breaks, CI reports nothing and an operator deploys admin rights to a
+      # principal that does not exist. So assert the warning is still emitted.
+      #
+      # This step failing means one of two things, and the message says which to look for:
+      # the committed parameter file now carries a real object ID (a secret leak), or the
+      # detector stopped working.
+      - name: Assert the placeholder check still fires
+        run: |
+          missing=0
+          for name in keyVaultAdminGroupObjectId sqlAdminGroupObjectId; do
+            if grep -q "$name is still the placeholder all-zero GUID" /tmp/preflight.txt; then
+              echo "ok: $name reported as a placeholder"
+            else
+              echo "::error::Preflight did not report $name as a placeholder."
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::Either infra/main.dev.bicepparam now carries a real object ID — check"
+            echo "::error::whether a tenant identifier was committed — or the check has broken."
+            exit 1
+          fi
 
   # ────────────────────────────────────────────────────────────────────────────────────
   upstream-packages:

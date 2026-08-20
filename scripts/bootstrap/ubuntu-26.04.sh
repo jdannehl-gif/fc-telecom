@@ -67,6 +67,25 @@ fail()    { printf '  %s[FAIL]%s %s\n' "$C_RED"    "$C_RESET" "$1"; FAILURES=$((
 warn()    { printf '  %s[warn]%s %s\n' "$C_YELLOW" "$C_RESET" "$1"; WARNINGS=$((WARNINGS + 1)); }
 note()    { printf '         %s%s%s\n' "$C_GREY" "$1" "$C_RESET"; }
 
+# A known upstream gap: something this script cannot install here, for a documented reason
+# outside this repository's control.
+#
+# In an install run that is a hard failure — the operator asked for a provisioned host and is
+# not getting one, and the whole point of --azure-cli=auto is to stop rather than substitute
+# the 24.04 repository silently.
+#
+# In --check it is a warning. Check mode reports what is present and what WOULD be installed;
+# on a bare host nothing is present, and every other function already says "would run: ..."
+# rather than failing. The Azure CLI branch was the only one that failed instead, which made
+# `--check` exit 1 on exactly the host it is meant to describe. Consistency, not leniency:
+# an install run still fails, loudly, with the same explanation.
+#
+# "Is this host ready to validate with?" is a different question, answered by
+# 00-Preflight.ps1, which fails on a missing az.
+gap() {
+  if [ "$CHECK_ONLY" -eq 1 ]; then warn "$1"; else fail "$1"; fi
+}
+
 usage() {
   cat <<'USAGE'
 Usage: ubuntu-26.04.sh [options]
@@ -307,7 +326,10 @@ install_powershell() {
       note "would query the PowerShell releases API (jq not installed in check mode)"
       return
     fi
-    version="$(curl -fsSL https://api.github.com/repos/PowerShell/PowerShell/releases \
+    # stderr silenced: a 403 from the unauthenticated rate limit is expected often enough,
+    # and it is handled below with a message that explains it. A raw curl error above that
+    # message reads like a fault.
+    version="$(curl -fsSL 2>/dev/null https://api.github.com/repos/PowerShell/PowerShell/releases \
       | jq -r '[.[] | select(.prerelease == false) | .tag_name]
                | map(select(startswith("v'"$PWSH_SERIES"'.")))
                | sort_by(. | ltrimstr("v") | split(".") | map(tonumber))
@@ -385,7 +407,7 @@ install_azure_cli() {
       ok "a ${VERSION_CODENAME} azure-cli repository exists — using apt"
       strategy="apt"
     elif [ "$strategy" = "apt" ]; then
-      fail "no azure-cli apt repository for ${VERSION_CODENAME}"
+      gap "no azure-cli apt repository for ${VERSION_CODENAME}"
       note "Microsoft's tested apt platforms are Ubuntu 22.04 and 24.04."
       return
     else
@@ -424,7 +446,7 @@ Signed-by: /etc/apt/keyrings/microsoft.gpg\" > /etc/apt/sources.list.d/azure-cli
       ;;
 
     none|*)
-      fail "Azure CLI cannot be installed safely on Ubuntu ${VERSION_ID:-?} by this script."
+      gap "Azure CLI cannot be installed safely on Ubuntu ${VERSION_ID:-?} by this script."
       cat <<EOF
 
   ${C_BOLD}Why${C_RESET}
@@ -458,7 +480,7 @@ EOF
 
 install_azure_cli_container() {
   if ! command -v docker >/dev/null 2>&1; then
-    fail "the container strategy needs Docker, which is not installed"
+    gap "the container strategy needs Docker, which is not installed"
     note "sudo apt-get install -y docker.io && sudo usermod -aG docker \$USER"
     return
   fi

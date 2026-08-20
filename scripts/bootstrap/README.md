@@ -10,6 +10,13 @@ sudo ./scripts/bootstrap/ubuntu-26.04.sh            # install
 
 Re-running is safe. Everything it installs is checked for first.
 
+**Exit codes.** An install run exits non-zero if it could not provision the host — including
+the Azure CLI gap below, which stops the run rather than substituting a repository. `--check`
+is a *report*: it exits zero on a bare host, because "not installed yet" is what it is there to
+tell you, and describes missing pieces as `[warn]` with a `would run: …` line. The question
+"is this host ready to validate with?" is a different one, answered by
+`00-Preflight.ps1`, which fails on a missing `az`.
+
 The application stays on **`net10.0`**. Nothing here changes the target framework, and this
 host is a validation runner, not a build environment for a different one.
 

@@ -300,8 +300,20 @@ if (-not (Test-Path $paramFile)) {
         $name = $Matches[1]; $value = $Matches[2]
 
         if ($value -eq $placeholder) {
-            Fail "$name is still the placeholder all-zero GUID"
-            Write-FcNote 'Deployment would succeed and grant vault/SQL admin to nothing.'
+            # A placeholder is a hard failure for an operator about to deploy, and the
+            # NORMAL state of a fresh clone — the committed file ships placeholders on
+            # purpose, because real tenant object IDs do not belong in source control.
+            # -SkipAzureSignIn is the fresh-clone case (it is what CI runs), so it says so
+            # rather than failing, exactly as the app-registration check below already does.
+            # The full preflight still fails, and CI asserts this line is still emitted so
+            # the demotion cannot quietly become a deletion.
+            if ($SkipAzureSignIn) {
+                Write-FcWarn "$name is still the placeholder all-zero GUID"
+                Write-FcNote 'Expected in a fresh clone. The full preflight FAILS on this.'
+            } else {
+                Fail "$name is still the placeholder all-zero GUID"
+                Write-FcNote 'Deployment would succeed and grant vault/SQL admin to nothing.'
+            }
         }
         elseif ($value -notmatch $guidPattern) {
             Fail "$name is not a GUID ('$value') — object IDs only, never display names"
@@ -367,15 +379,25 @@ Write-FcHeading 'Bicep'
 # installs standalone Bicep precisely because the Azure CLI may be running out of a container,
 # where `az bicep install` writes into a layer that disappears. Falling back to `az bicep`
 # keeps this working on a Windows workstation, where `az bicep install` is the normal route.
+# Compile to a temp file rather than --stdout, so the only thing captured is diagnostics.
+# And the diagnostics ARE captured: the previous version swallowed stderr with 2>$null and
+# reported a bare "does not compile", which is the least useful possible way to say it.
+$bicepOut = Join-Path ([System.IO.Path]::GetTempPath()) 'fc-main.json'
+
 if (Get-Command bicep -ErrorAction SilentlyContinue) {
-    bicep build --file infra/main.bicep --stdout 2>$null | Out-Null
+    # The standalone CLI takes the path POSITIONALLY. `--file` is Azure CLI syntax
+    # (`az bicep build --file X`); the standalone binary rejects it. Getting this wrong is
+    # how this check first reported "does not compile" for a template that compiles fine in
+    # `validate-infrastructure` — a false alarm on the tool, blamed on the template.
+    $bicepLog  = & bicep build infra/main.bicep --outfile $bicepOut 2>&1
     $bicepExit = $LASTEXITCODE
     $bicepVia  = 'bicep'
 } elseif ($azOk) {
-    az bicep build --file infra/main.bicep --stdout 2>$null | Out-Null
+    $bicepLog  = & az bicep build --file infra/main.bicep --outfile $bicepOut 2>&1
     $bicepExit = $LASTEXITCODE
     $bicepVia  = 'az bicep'
 } else {
+    $bicepLog  = @()
     $bicepExit = $null
     $bicepVia  = $null
 }
@@ -384,9 +406,17 @@ if ($null -eq $bicepExit) {
     Fail 'no Bicep available — install the standalone binary or run az bicep install'
 } elseif ($bicepExit -eq 0) {
     Write-FcPass "infra/main.bicep compiles (via $bicepVia)"
+    foreach ($line in @(@($bicepLog) | Where-Object { $_ -match 'Warning' } | Select-Object -First 10)) {
+        Write-FcNote ($line -replace '\s+$', '')
+    }
 } else {
-    Fail "infra/main.bicep does not compile (via $bicepVia)"
+    Fail "infra/main.bicep does not compile (via $bicepVia, exit $bicepExit)"
+    foreach ($line in @(@($bicepLog) | Select-Object -First 20)) {
+        Write-FcNote ($line -replace '\s+$', '')
+    }
 }
+
+Remove-Item $bicepOut -ErrorAction SilentlyContinue
 
 # ── Result ─────────────────────────────────────────────────────────────────────────────
 Write-Host ''
