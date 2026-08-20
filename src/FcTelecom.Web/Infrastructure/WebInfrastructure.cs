@@ -18,10 +18,20 @@ namespace FcTelecom.Web.Infrastructure;
 /// Response security headers.
 /// </summary>
 /// <remarks>
-/// The CSP is the fiddly one. Blazor Server needs <c>wasm-unsafe-eval</c> for its
-/// interop and a small inline bootstrap script, but it does not need blanket
-/// <c>unsafe-inline</c> — which is what most Blazor CSP examples reach for and which
-/// gives away most of the protection.
+/// The CSP is the fiddly one, and this comment previously got it wrong — it claimed
+/// Blazor Server needs <c>wasm-unsafe-eval</c> for interop and an inline bootstrap script.
+/// It needs neither.
+/// <para>
+/// This application renders with <c>InteractiveServer</c> and contains no WebAssembly at
+/// all. <c>_framework/blazor.web.js</c> is an ordinary external script, and every handler
+/// is a Blazor <c>@onclick</c> directive — a delegate registration, not inline JavaScript.
+/// So <c>script-src 'self'</c> covers everything, with no exception for anything.
+/// </para>
+/// <para>
+/// <c>wasm-unsafe-eval</c> belongs to Blazor <i>WebAssembly</i>, where the Mono runtime
+/// genuinely requires dynamic code execution. Carrying it here granted an exception nothing
+/// used, which is the quiet way a policy stops meaning anything.
+/// </para>
 /// </remarks>
 public static class SecurityHeadersMiddleware
 {
@@ -41,12 +51,29 @@ public static class SecurityHeadersMiddleware
 
             headers["Content-Security-Policy"] = string.Join("; ",
                 "default-src 'self'",
-                "script-src 'self' 'wasm-unsafe-eval'",
+
+                // 'self' only. This app renders with InteractiveServer and contains no
+                // WebAssembly anywhere — `wasm-unsafe-eval` was here in error, copied from
+                // the Blazor WebAssembly guidance where the Mono runtime genuinely needs it.
+                // Server-side Blazor loads _framework/blazor.web.js as an ordinary external
+                // script and registers @onclick handlers as delegates, not inline JS, so
+                // there is nothing here to grant an exception for.
+                "script-src 'self'",
+
                 "style-src 'self'",
                 "img-src 'self' data:",
                 "font-src 'self'",
-                // Blazor Server's circuit is a WebSocket back to this origin, and nothing else.
-                "connect-src 'self' wss: https://login.microsoftonline.com",
+
+                // The Blazor circuit is a WebSocket back to this origin and nothing else.
+                // CSP Level 3 has 'self' match same-origin ws:/wss:, so the previous blanket
+                // `wss:` — which permitted a socket to ANY host — was both broader than the
+                // comment above it claimed and broader than the app needs.
+                //
+                // VERIFY THIS: if interactive pages load but never become responsive, the
+                // circuit is being blocked. Check the browser console for a CSP violation on
+                // connect-src before assuming the server is at fault.
+                "connect-src 'self'",
+
                 "frame-ancestors 'none'",
                 "form-action 'self' https://login.microsoftonline.com",
                 "base-uri 'self'",
