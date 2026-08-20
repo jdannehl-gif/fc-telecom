@@ -1,0 +1,273 @@
+name: Ubuntu 26.04 validation-host compatibility
+
+# Why this workflow exists
+# ------------------------
+# The Azure validation pass runs on a standalone Ubuntu Server 26.04 LTS host. Ubuntu 26.04 is
+# new enough that several Microsoft-published packages have not caught up with it, and the
+# ways that shows up — `apt install powershell` failing, an Azure CLI repository that has no
+# `resolute` suite — are exactly the kind of thing that gets discovered at 9am on validation
+# day. So it is checked here, on a schedule, against a real 26.04 image.
+#
+# Three jobs, three different questions:
+#
+#   bootstrap-check    Does the bootstrap script parse, and does its read-only mode run clean
+#                      on a bare 26.04 image? Fast, no installs, runs on every relevant push.
+#
+#   bootstrap-install  Does the bootstrap script actually produce a working validation host —
+#                      .NET 10 SDK, PowerShell 7, Bicep, dotnet-ef, the SqlServer module — and
+#                      do the validation scripts then load and run their non-authenticated
+#                      checks on it? This is the real test. It installs for several minutes.
+#
+#   upstream-packages  Have Microsoft published the packages that are missing for 26.04 yet?
+#                      This job NEVER fails. It writes to the run summary. The day the answer
+#                      changes, the summary says so and scripts/bootstrap/README.md can be
+#                      simplified — but a package Microsoft has not shipped is not a defect in
+#                      this repository, and marking the workflow red every night for it would
+#                      teach everyone to ignore the workflow.
+#
+# Nothing here builds or tests the application, and nothing here changes its target framework.
+# The application stays on net10.0; CI (ci.yml) is what proves it builds.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/bootstrap/**'
+      - 'scripts/validate/**'
+      - 'infra/**'
+      - '.github/workflows/ubuntu-2604-compat.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'scripts/bootstrap/**'
+      - 'scripts/validate/**'
+      - 'infra/**'
+      - '.github/workflows/ubuntu-2604-compat.yml'
+  # Weekly, because the thing most likely to change is upstream, not this repository.
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DEBIAN_FRONTEND: noninteractive
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────────────────────
+  bootstrap-check:
+    name: Bootstrap --check on ubuntu:26.04
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container:
+      image: ubuntu:26.04
+
+    steps:
+      # A bare ubuntu image has no git and no CA certificates, and actions/checkout needs
+      # both. Installing them here rather than relying on the runner image is the whole
+      # point — the runner image is not the host we are testing.
+      - name: Minimal prerequisites for checkout
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates curl
+
+      - uses: actions/checkout@v7
+
+      - name: Confirm this really is 26.04
+        run: |
+          . /etc/os-release
+          echo "PRETTY_NAME=$PRETTY_NAME  VERSION_ID=$VERSION_ID  CODENAME=$VERSION_CODENAME"
+          if [ "$VERSION_ID" != "26.04" ]; then
+            echo "::error::Expected VERSION_ID 26.04, got '$VERSION_ID'. The ubuntu:26.04 tag moved or is wrong."
+            exit 1
+          fi
+
+      - name: Syntax
+        run: bash -n scripts/bootstrap/ubuntu-26.04.sh
+
+      - name: Help text
+        run: bash scripts/bootstrap/ubuntu-26.04.sh --help
+
+      # Every strategy value must at least parse and dry-run. An unknown value must be
+      # rejected with exit 2 rather than silently accepted — a typo in --azure-cli on the
+      # real host should not quietly install nothing.
+      - name: Argument handling
+        run: |
+          set -e
+          for strategy in auto apt container pipx skip; do
+            echo "── --azure-cli=$strategy"
+            bash scripts/bootstrap/ubuntu-26.04.sh --check --azure-cli="$strategy" >/dev/null
+          done
+          if bash scripts/bootstrap/ubuntu-26.04.sh --check --azure-cli=nonsense >/dev/null 2>&1; then
+            echo "::error::An invalid --azure-cli value was accepted."
+            exit 1
+          fi
+          echo "invalid strategy correctly rejected"
+
+      # --check needs no root and installs nothing. On a bare image everything is missing, so
+      # this is asserting that the script reports cleanly rather than that the host is ready.
+      - name: Read-only check run
+        run: bash scripts/bootstrap/ubuntu-26.04.sh --check
+
+      - name: Assert --check mutated nothing
+        run: |
+          for binary in pwsh dotnet az bicep dotnet-ef; do
+            if command -v "$binary" >/dev/null 2>&1; then
+              echo "::error::--check installed $binary. It must not mutate the host."
+              exit 1
+            fi
+          done
+          echo "nothing was installed, as intended"
+
+  # ────────────────────────────────────────────────────────────────────────────────────
+  bootstrap-install:
+    name: Full bootstrap + non-authenticated preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    container:
+      image: ubuntu:26.04
+
+    steps:
+      - name: Minimal prerequisites for checkout
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates curl
+
+      - uses: actions/checkout@v7
+
+      # --azure-cli=skip, deliberately.
+      #
+      # There is no Azure CLI install path that is both Microsoft-supported on 26.04 and
+      # available inside this container: the apt repository has no `resolute` suite, and the
+      # container strategy needs a Docker daemon that a container job does not have. Using
+      # pipx here to make the job look greener would be testing an install path the runbook
+      # tells operators not to use. The upstream-packages job below is where the Azure CLI
+      # question is asked honestly.
+      #
+      # Nothing downstream in this job needs `az`: Bicep is the standalone binary, and
+      # preflight -SkipAzureSignIn calls no authenticated command.
+      - name: Bootstrap
+        run: bash scripts/bootstrap/ubuntu-26.04.sh --azure-cli=skip
+
+      - name: Versions
+        run: |
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          set -x
+          . /etc/os-release && echo "$PRETTY_NAME"
+          dotnet --version
+          dotnet --list-sdks
+          pwsh -NoProfile -Command '$PSVersionTable | Format-List'
+          bicep --version
+          dotnet-ef --version
+
+      # The two facts the runbook actually depends on, asserted rather than eyeballed.
+      - name: Assert .NET 10 SDK from the Ubuntu archive
+        run: |
+          if ! dotnet --list-sdks | grep -q '^10\.'; then
+            echo "::error::No 10.x SDK. The application targets net10.0."
+            exit 1
+          fi
+          policy=$(apt-cache policy dotnet-sdk-10.0 2>/dev/null || true)
+          echo "$policy"
+          if echo "$policy" | grep -q 'packages.microsoft.com'; then
+            echo "::error::dotnet-sdk-10.0 resolved to packages.microsoft.com. The APT pin failed."
+            exit 1
+          fi
+          echo "10.x SDK present, sourced from the Ubuntu archive"
+
+      - name: Assert Invoke-Sqlcmd supports -AccessToken
+        run: |
+          pwsh -NoProfile -Command '
+            Import-Module SqlServer -ErrorAction Stop
+            $cmd = Get-Command Invoke-Sqlcmd -ErrorAction Stop
+            if (-not $cmd.Parameters.ContainsKey("AccessToken")) {
+              Write-Error "Invoke-Sqlcmd has no -AccessToken; 07-TestAppIdentity.ps1 cannot run"
+              exit 1
+            }
+            "SqlServer $((Get-Module SqlServer).Version) — -AccessToken present"'
+
+      # Every validation script must at least parse under PowerShell 7 on Linux. A syntax
+      # error in 09-VerifyEncryption.ps1 should not first be discovered nine steps into a
+      # pass that has already deployed infrastructure.
+      - name: Parse every validation script
+        run: |
+          pwsh -NoProfile -Command '
+            $bad = 0
+            Get-ChildItem scripts/validate -Include *.ps1,*.psm1 -Recurse | ForEach-Object {
+              $errors = $null
+              [void][System.Management.Automation.Language.Parser]::ParseFile(
+                  $_.FullName, [ref]$null, [ref]$errors)
+              if ($errors) {
+                $bad++
+                Write-Host "PARSE FAIL: $($_.Name)"
+                $errors | ForEach-Object { Write-Host "    $($_.Extent.StartLineNumber): $($_.Message)" }
+              } else {
+                Write-Host "ok: $($_.Name)"
+              }
+            }
+            exit $bad'
+
+      - name: Import the shared module
+        run: pwsh -NoProfile -Command 'Import-Module ./scripts/validate/FcValidation.psm1 -Force; Get-Command -Module FcValidation | Format-Table Name'
+
+      - name: Linux compatibility audit
+        run: pwsh -NoProfile -File scripts/validate/Test-LinuxCompatibility.ps1 -IncludeAdvisory
+
+      # The point of the whole job: the real preflight script, running its real checks, on a
+      # real 26.04 host, minus the parts that need a subscription.
+      - name: Preflight (non-authenticated portion)
+        run: |
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          pwsh -NoProfile -File scripts/validate/00-Preflight.ps1 -SkipAzureSignIn
+
+  # ────────────────────────────────────────────────────────────────────────────────────
+  upstream-packages:
+    name: Upstream package availability for 26.04
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # This job reports; it does not gate. See the header comment.
+    continue-on-error: true
+
+    steps:
+      - name: Probe packages.microsoft.com for a 26.04 (resolute) suite
+        run: |
+          codename=resolute
+          {
+            echo "## Microsoft package availability for Ubuntu 26.04 (\`$codename\`)"
+            echo
+            echo "Checked at \`$(date -u +'%Y-%m-%dT%H:%M:%SZ')\`."
+            echo
+            echo "| Feed | 26.04 suite published? |"
+            echo "|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          probe() {
+            local label="$1" url="$2"
+            if curl -fsI --max-time 20 "$url" >/dev/null 2>&1; then
+              echo "| $label | **yes** — $url |" >> "$GITHUB_STEP_SUMMARY"
+              echo "AVAILABLE: $label"
+            else
+              echo "| $label | no |" >> "$GITHUB_STEP_SUMMARY"
+              echo "not available: $label"
+            fi
+          }
+
+          probe "Azure CLI (azure-cli)" \
+                "https://packages.microsoft.com/repos/azure-cli/dists/$codename/Release"
+          probe "PowerShell / prod (ubuntu 26.04)" \
+                "https://packages.microsoft.com/ubuntu/26.04/prod/dists/$codename/Release"
+
+          {
+            echo
+            echo "If a row above says **yes**, the corresponding workaround in"
+            echo "\`scripts/bootstrap/README.md\` and \`docs/runbooks/azure-validation.md\` can be"
+            echo "replaced with the plain apt install, and \`scripts/bootstrap/ubuntu-26.04.sh\`"
+            echo "will pick it up automatically on the next run — \`--azure-cli=auto\` probes for"
+            echo "exactly this before deciding."
+            echo
+            echo "A **no** is a fact about upstream, not a defect here, which is why this job"
+            echo "does not fail."
+          } >> "$GITHUB_STEP_SUMMARY"

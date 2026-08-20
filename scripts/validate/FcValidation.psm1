@@ -40,7 +40,12 @@ function Get-FcAzContext {
     #>
     $raw = az account show -o json 2>$null
     if (-not $raw) {
-        throw "Not signed in to Azure. Run: az login"
+        # --use-device-code, not a bare `az login`. The validation host is a headless Ubuntu
+        # server: a bare `az login` tries to open a browser, fails or hangs, and the operator
+        # is left following an instruction that cannot work. The device-code flow prints a
+        # code to complete in a browser on any other machine.
+        $hint = if ($IsWindows) { 'az login' } else { 'az login --use-device-code' }
+        throw "Not signed in to Azure. Run: $hint"
     }
     return $raw | ConvertFrom-Json
 }

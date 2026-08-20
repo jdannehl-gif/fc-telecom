@@ -17,8 +17,9 @@ param(
     [Parameter(Mandatory)][string]$ResourceGroup,
     [string]$Location = 'eastus2',
 
-    # A dev environment left running is the most common source of surprise Azure spend, which
-    # is a slightly awkward thing to be surprised by in a telecom cost-management application.
+    # An Azure budget is an ALERT THRESHOLD, not a spending cap. Azure does not stop billing
+    # or deallocate anything when the amount is reached — it emails whoever is listed. Nothing
+    # in this script can prevent spend; it can only make sure someone finds out.
     [int]$MonthlyBudgetUsd = 150,
     [string]$BudgetAlertEmail,
 
@@ -57,12 +58,18 @@ if ($exists) {
 }
 
 # ── Budget ─────────────────────────────────────────────────────────────────────────────
-Write-FcHeading 'Cost guard'
+Write-FcHeading 'Cost alerting'
+
+Write-FcWarn 'An Azure budget is an ALERT, not a cap.'
+Write-FcNote 'Reaching the amount sends email. It does not stop billing, throttle anything,'
+Write-FcNote 'or deallocate resources. Spend continues until someone acts on the alert.'
+Write-FcNote 'The only hard control is deleting the resource group — 99-Cleanup.ps1.'
 
 if (-not $BudgetAlertEmail) {
     Write-FcWarn 'No -BudgetAlertEmail supplied; skipping budget creation.'
-    Write-FcNote 'Strongly consider setting one. A dev App Service plan, SQL database and'
-    Write-FcNote 'Log Analytics workspace left running costs real money quietly.'
+    Write-FcNote 'Set one anyway. A dev App Service plan, SQL database and Log Analytics'
+    Write-FcNote 'workspace left running costs real money quietly, and an alert nobody'
+    Write-FcNote 'configured is the reason people discover that at month end.'
 } else {
     $budgetName = "budget-$ResourceGroup"
     $startDate  = (Get-Date -Day 1).ToString('yyyy-MM-01')
@@ -130,8 +137,12 @@ Write-FcNote 'Later scripts read these rather than assuming resource names.'
 
 Write-Host ''
 Write-Host 'Next steps, in order:' -ForegroundColor Cyan
-Write-Host '  1. docs/runbooks/entra-setup-dev.md — app registration, group claims, role mappings'
-Write-Host "  2. ./scripts/validate/03-ReviewMigration.ps1"
-Write-Host "  3. Apply the migration as the MIGRATION identity (see the runbook, step 4)"
-Write-Host "  4. Run 04-GrantDatabasePrincipals.sql to create the least-privilege runtime user"
-Write-Host "  5. ./scripts/validate/05-TestAppIdentity.ps1 -ResourceGroup $ResourceGroup"
+Write-Host '  Validation step 4  docs/runbooks/entra-setup-dev.md B - redirect URLs, client secret'
+Write-Host '  Validation step 5  ./scripts/validate/03-SetEncryptionKeys.ps1'
+Write-Host '                     REQUIRED before the application can start at all'
+Write-Host '  Validation step 6  ./scripts/validate/04-ReviewMigration.ps1, then apply the'
+Write-Host '                     migration as the migration identity, then'
+Write-Host '                     05-GrantDatabasePrincipals.sql'
+Write-Host '  Validation step 7  ./scripts/validate/06-DeployApp.ps1'
+Write-Host ''
+Write-Host 'docs/runbooks/azure-validation.md is authoritative for order.' -ForegroundColor Cyan
