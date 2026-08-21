@@ -69,13 +69,40 @@ same probe weekly and writes the answer into the run summary, so you do not have
 |---|---|---|
 | **.NET 10 SDK** | Ubuntu archive (`dotnet-sdk-10.0`, in 26.04 main) | Microsoft's own guidance for Ubuntu 22.04+ is the native feed, and is explicit that mixing it with `packages.microsoft.com` "leads to problems when apps try to resolve a specific version of .NET". The script adds an APT pin so a Microsoft repository added later for some other reason cannot silently take over .NET. |
 | **PowerShell 7.6** | GitHub release `.deb` | `apt install powershell` fails on 26.04: the Microsoft repository has a 26.04 bootstrap config, but the PowerShell packages themselves are not published there. Manual `.deb` install is a documented, supported method, and 26.04 is a supported PowerShell platform. |
-| **Bicep** | Standalone binary from the Bicep release | `az bicep install` writes into the Azure CLI's own directory. Under `--azure-cli=container` that is a layer discarded on exit, so it would appear to succeed and then never be there. A host binary works under every strategy. `00-Preflight.ps1` prefers it and falls back to `az bicep`. |
+| **Bicep** | Standalone binary at `/usr/local/bin/bicep` | `az bicep install` writes into the Azure CLI's own directory. Under `--azure-cli=container` that is a layer discarded on exit, so it appears to succeed and is then gone — a fresh download on every invocation. A host binary works under every strategy. See the note below: the validation scripts compile **here** and hand `az` plain ARM JSON. |
 | **`dotnet-ef` 10.x** | `dotnet tool install --global` | Installed as the invoking user, not root — global tools are per-user, and a `dotnet-ef` in `/root` that the operator cannot find is a genuinely confusing ten minutes. `~/.dotnet/tools` is added to `PATH`, because Ubuntu does not do that for you. |
 | **SqlServer module** | PSGallery, `CurrentUser` scope | Verified by capability, not version: the script imports it and asserts `Invoke-Sqlcmd` exposes `-AccessToken`. That parameter is how `07-TestAppIdentity.ps1` connects as the App Service managed identity, and discovering its absence three steps into a pass — after a deployment — is the failure this check exists to prevent. |
 
 `unixODBC` and `msodbcsql18` are **not** installed and **not** required. `Invoke-Sqlcmd` uses
 the managed `Microsoft.Data.SqlClient` driver. `--with-odbc` installs unixODBC for anyone who
 wants it for unrelated reasons, with a warning attached.
+
+### Bicep and the containerised CLI
+
+The bootstrap used to run `az config set bicep.use_binary_from_path=true` and report success.
+The first real deployment then printed:
+
+```
+WARNING: The configuration value of bicep.use_binary_from_path has been set to 'false'.
+```
+
+Two structural reasons, not bad luck. Bootstrap runs under `sudo`, so `az config set` wrote to
+`/root/.azure` and the operator's own `~/.azure` never saw it. And under `--azure-cli=container`
+the setting was pointless anyway: the container cannot see `/usr/local/bin/bicep`, so "use the
+binary from PATH" named a path that does not exist inside it.
+
+Persisted configuration is the wrong mechanism for something that must hold every time. It is
+gone, replaced by two things that cannot drift:
+
+1. **The validation scripts compile Bicep on the host and pass ARM JSON to `az`**, so the CLI
+   never needs Bicep at all. `Build-FcTemplate` in `scripts/validate/FcValidation.psm1` is the
+   single place that does it, and the compiled template is saved to `artifacts/validation/`
+   alongside the what-if output — the exact artefact that was deployed, reviewable after the
+   fact. This is the path that matters.
+2. **The container wrapper mounts `/usr/local/bin/bicep` read-only** and sets
+   `AZURE_BICEP_USE_BINARY_FROM_PATH=true` per invocation, so a stray `az bicep` from anywhere
+   else still uses the host binary and still never downloads one into a disposable layer. An
+   environment variable cannot land in the wrong home directory.
 
 ---
 

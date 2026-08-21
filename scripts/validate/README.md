@@ -62,8 +62,8 @@ Run from the repository root.
 | Script | Mutates | What it does |
 |---|---|---|
 | `00-Preflight.ps1` | no | Host and tooling versions, SQL client capability, subscription, providers, parameter file, Bicep. `-SkipAzureSignIn` runs only the checks needing no credentials |
-| `01-InfraWhatIf.ps1` | no | what-if with `FullResourcePayloads`; flags destructive property changes |
-| `02-DeployInfra.ps1` | **yes** | Resource group, budget **alert**, deployment; writes `outputs-<env>.json` |
+| `01-InfraWhatIf.ps1` | no | **Subscription-scope** what-if with `FullResourcePayloads`; flags destructive property changes |
+| `02-DeployInfra.ps1` | **yes** | **Subscription-scope** deployment: creates the resource group, the budget **alert** and everything in it; writes `outputs-<env>.json` |
 | `03-SetEncryptionKeys.ps1` | **yes** | Field-encryption keys — **required before the app can start at all** |
 | `04-ReviewMigration.ps1` | no | Generates migration SQL, checks four known failure modes |
 | `05-GrantDatabasePrincipals.sql` | **yes** | Migration identity vs runtime identity; audit DENY |
@@ -80,8 +80,28 @@ numbers 1, 4 and 9 of the validation sequence have no script.
 `FcValidation.psm1` holds the shared context banner, the confirmation gate, and deployment-output
 loading. Everything imports it.
 
-`Test-LinuxCompatibility.ps1` is not part of the sequence — it audits the other files and is run
-by CI. `05-GrantDatabasePrincipals.sql` is SQL, executed from step 6 of the runbook.
+`Test-LinuxCompatibility.ps1` and `Test-DeploymentSequencing.ps1` are not part of the sequence —
+they audit and test the other files, and CI runs both. `05-GrantDatabasePrincipals.sql` is SQL,
+executed from step 6 of the runbook.
+
+## Two entry points, one parameter file
+
+`infra/subscription.bicep` is what steps 3 deploys. It creates `rg-fctelecom-dev`, tags it, and
+consumes the resource-group-scoped `infra/main.bicep` as a module — so the what-if preview
+includes creating the group, and a **first** deployment works. Previewing `main.bicep` directly
+against a group that does not exist yet is what produced `ResourceGroupNotFound` on the first
+real run.
+
+There is deliberately **no `subscription.dev.bicepparam`**. Tenant-specific values — the Entra
+group object IDs — live in `infra/main.dev.bicepparam` and nowhere else. The scripts read that
+file and generate the subscription-scope parameters into `artifacts/validation/`, so an
+operator's edited copy is never rewritten, and `main.dev.bicepparam` stays usable on its own for
+a resource-group-scoped deployment. `Test-DeploymentSequencing.ps1` asserts both halves of that.
+
+**Bicep is compiled on the host, and `az` is handed ARM JSON.** Under the containerised Azure
+CLI on Ubuntu 26.04 the CLI cannot see `/usr/local/bin/bicep`, and anything it downloads for
+itself lands in a layer that disappears when the container exits. Compiling here removes the
+question; `Build-FcTemplate` in `FcValidation.psm1` is the one place that does it.
 
 ## Conventions these scripts follow
 

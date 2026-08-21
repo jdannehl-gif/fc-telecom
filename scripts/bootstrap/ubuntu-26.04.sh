@@ -509,6 +509,11 @@ install_azure_cli_container() {
 #   * Only \$HOME and the current working directory are visible inside the container. A
 #     --template-file or --src-path outside both will not be found. Run the validation
 #     scripts from the repository root, which is what the runbook says to do anyway.
+#   * Bicep: /usr/local/bin/bicep is mounted read-only and
+#     AZURE_BICEP_USE_BINARY_FROM_PATH=true is set, so 'az bicep' uses the HOST binary and
+#     never downloads one into a layer that disappears when this container exits. The
+#     validation scripts do not rely on that — they compile on the host and pass ARM JSON —
+#     but a stray 'az bicep' from anywhere else now behaves deterministically too.
 #   * The container runs as your UID so that files it writes (~/.azure, artifacts) stay
 #     yours rather than becoming root-owned.
 #   * 'az login --use-device-code' works: the device code is printed and you complete it in
@@ -524,7 +529,17 @@ set -euo pipefail
 tty_flag=()
 if [ -t 0 ] && [ -t 1 ]; then tty_flag=(--tty); fi   # not '&&' — under set -e a false test exits
 
-exec docker run --rm --interactive "\${tty_flag[@]}" \\
+# Mount the HOST Bicep binary rather than letting the CLI fetch its own into a layer that is
+# thrown away when this container exits. The env var is the same setting as
+# 'az config set bicep.use_binary_from_path', supplied per-invocation so it cannot end up in
+# the wrong home directory the way the persisted config did.
+bicep_mount=()
+if [ -x /usr/local/bin/bicep ]; then
+  bicep_mount=(--volume /usr/local/bin/bicep:/usr/local/bin/bicep:ro
+               --env AZURE_BICEP_USE_BINARY_FROM_PATH=true)
+fi
+
+exec docker run --rm --interactive "\${tty_flag[@]}" "\${bicep_mount[@]}" \\
   --user "\$(id -u):\$(id -g)" \\
   --env HOME=/work/home \\
   --volume "\$HOME:/work/home" \\
@@ -565,12 +580,35 @@ install_bicep() {
     fi
   fi
 
-  # Point the CLI at the host binary so `az bicep build` and `az deployment` use it.
-  if command -v az >/dev/null 2>&1; then
-    run az config set bicep.use_binary_from_path=true --only-show-errors
-    ok "az configured to use the bicep binary from PATH"
-  else
-    warn "az not available yet — run 'az config set bicep.use_binary_from_path=true' after installing it"
+  # DELIBERATELY NO `az config set bicep.use_binary_from_path=true` HERE.
+  #
+  # It was here, it reported success, and the real deployment then printed:
+  #
+  #   WARNING: The configuration value of bicep.use_binary_from_path has been set to 'false'.
+  #
+  # Two reasons, both structural rather than bad luck. Bootstrap runs under sudo, so `az
+  # config set` wrote to /root/.azure and the operator's own ~/.azure never saw it. And under
+  # --azure-cli=container the setting would be pointless anyway: the container cannot see
+  # /usr/local/bin/bicep, so "use the binary from PATH" names a path that does not exist
+  # inside it, and whatever `az bicep install` fetches instead lands in a layer that is
+  # discarded on exit — a fresh download on every single invocation.
+  #
+  # Persisted configuration is the wrong mechanism for something that has to be true every
+  # time. Two deterministic mechanisms replace it:
+  #
+  #   1. The validation scripts compile Bicep on the HOST and pass ARM JSON to `az`, so the
+  #      CLI never needs Bicep at all. See Build-FcTemplate in FcValidation.psm1. This is the
+  #      path that matters.
+  #   2. The container wrapper mounts /usr/local/bin/bicep read-only and sets
+  #      AZURE_BICEP_USE_BINARY_FROM_PATH=true in the environment, so a stray `az bicep`
+  #      invocation from somewhere else still uses this binary and still never downloads one.
+  #      An environment variable cannot be written to the wrong home directory.
+  if [ -x /usr/local/bin/bicep ]; then
+    ok "host binary at /usr/local/bin/bicep — scripts compile here and pass ARM JSON to az"
+  elif [ "$CHECK_ONLY" -eq 0 ]; then
+    warn "no binary at /usr/local/bin/bicep; the container wrapper cannot mount one"
+    note "The validation scripts fall back to 'az bicep build', which under the container"
+    note "strategy downloads Bicep into a disposable layer on every call."
   fi
 }
 

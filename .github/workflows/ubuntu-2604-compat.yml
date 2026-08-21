@@ -252,6 +252,48 @@ jobs:
       - name: Linux compatibility audit
         run: pwsh -NoProfile -File scripts/validate/Test-LinuxCompatibility.ps1 -IncludeAdvisory
 
+      # The first-deployment path. This is the one that cannot be checked by re-running the
+      # real pass: once rg-fctelecom-dev exists, the state where it does not is gone, and that
+      # is the state that produced ResourceGroupNotFound. Azure is not called — `az` is
+      # replaced with a recorded test double — so this runs on every push.
+      - name: Deployment sequencing (first run and repeat run)
+        run: |
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          pwsh -NoProfile -File scripts/validate/Test-DeploymentSequencing.ps1
+
+      # Belt and braces on the same defect, at the level of the compiled artefact rather than
+      # the script. A resource-group-scoped template physically cannot create its own group,
+      # so if this schema ever changes back, step 3 breaks again on a first run only.
+      - name: Assert the deployment entry point is subscription-scoped
+        run: |
+          bicep build infra/subscription.bicep --outfile /tmp/subscription.json
+          schema=$(python3 -c "import json;print(json.load(open('/tmp/subscription.json'))['\$schema'])")
+          echo "schema: $schema"
+          case "$schema" in
+            *subscriptionDeploymentTemplate*) echo "ok: subscription scope" ;;
+            *) echo "::error::infra/subscription.bicep compiled to '$schema', not a subscription template."
+               exit 1 ;;
+          esac
+          python3 - <<'PY'
+          import json, sys
+          t = json.load(open('/tmp/subscription.json'))
+          groups = [r for r in t['resources'] if r['type'] == 'Microsoft.Resources/resourceGroups']
+          if len(groups) != 1:
+              print(f"::error::expected exactly one resource group resource, found {len(groups)}")
+              sys.exit(1)
+          tags = t['variables'][groups[0]['tags'].strip('[]').split("'")[1]]
+          if tags.get('application') != 'fc-telecom':
+              print(f"::error::application tag is {tags.get('application')!r}, expected 'fc-telecom'")
+              sys.exit(1)
+          if 'Microsoft.Consumption/budgets' not in json.dumps(t):
+              print("::error::no budget in the template")
+              sys.exit(1)
+          if 'ResourceGroupName' not in json.dumps(t):
+              print("::error::the budget has no ResourceGroupName filter")
+              sys.exit(1)
+          print("ok: resource group tagged application=fc-telecom, budget filtered to it")
+          PY
+
       # The point of the whole job: the real preflight script, running its real checks, on a
       # real 26.04 host, minus the parts that need a subscription.
       - name: Preflight (non-authenticated portion)

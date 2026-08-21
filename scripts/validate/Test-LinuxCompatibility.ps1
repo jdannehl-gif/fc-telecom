@@ -100,8 +100,12 @@ foreach ($file in $targets) {
         # Two ways a line is regex rather than paths: it calls something regex-shaped, or it
         # simply contains regex escape classes. The second case catches continuation lines of
         # a multi-line [regex]::Matches(...) call, where the giveaway call is on a line above.
+        # A third case: \n, \t and \r are escape sequences in printf formats and in embedded
+        # shell, not path separators. Test-DeploymentSequencing.ps1 carries a shell test double
+        # whose `printf '%s\n'` was reported as a Windows path.
         $isRegexContext = ($code -match '(\[regex\]::|-match|-notmatch|-replace|-split|Matches\(|Match\()') -or
-                          ($code -match '\\[swdbWSDB]|\\\[|\\\(|\\\.|\\\?|\\\+')
+                          ($code -match '\\[swdbWSDB]|\\\[|\\\(|\\\.|\\\?|\\\+') -or
+                          ($code -match '\\[nrt0]')
 
         foreach ($rule in $rules) {
             if ($isRegexContext -and $rule.Id -eq 'backslash-path') { continue }

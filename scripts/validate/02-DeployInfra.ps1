@@ -1,15 +1,30 @@
 <#
 .SYNOPSIS
-    Create the resource group and budget if needed, deploy the infrastructure, capture outputs.
+    Deploy the infrastructure at subscription scope — resource group, budget and all — and
+    capture the outputs.
 
 .EXAMPLE
     ./scripts/validate/02-DeployInfra.ps1 -Environment dev -ResourceGroup rg-fctelecom-dev `
         -Location eastus2 -MonthlyBudgetUsd 150 -BudgetAlertEmail you@example.org
 
 .NOTES
-    MUTATING. Requires confirmation. Every resource name used downstream comes from this
-    deployment's outputs — nothing is assumed or reconstructed from a naming convention,
-    because infra/main.bicep uses uniqueString() suffixes that cannot be derived.
+    MUTATING. Requires the resource group name to be typed.
+
+    THE RESOURCE GROUP IS CREATED BY THE TEMPLATE, NOT BY THIS SCRIPT.
+
+    It used to be created here with `az group create`, before the deployment. That is what
+    made the what-if in step 3 impossible to run on a first deployment: the preview pointed at
+    a group that did not exist yet, and Azure answered ResourceGroupNotFound. Creating the
+    group earlier would have "fixed" it by performing a mutation before the gate that exists
+    to approve mutations.
+
+    Now both the preview and the deployment run against infra/subscription.bicep at
+    subscription scope, so creating the group is part of the reviewed change. The two commands
+    differ only in the verb.
+
+    Every resource name used downstream comes from this deployment's outputs — nothing is
+    assumed or reconstructed from a naming convention, because infra/main.bicep uses
+    uniqueString() suffixes that cannot be derived.
 #>
 [CmdletBinding()]
 param(
@@ -30,32 +45,45 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 Import-Module "$PSScriptRoot/FcValidation.psm1" -Force
 
-Show-FcContext -Operation 'Deploy infrastructure' -Environment $Environment `
+Show-FcContext -Operation 'Deploy infrastructure (subscription scope)' -Environment $Environment `
                -ResourceGroup $ResourceGroup -Mutating | Out-Null
 
-$exists = az group exists --name $ResourceGroup | ConvertFrom-Json
+$results = New-FcResultsDirectory
 
-$summary = if ($exists) {
-    "deploy infra/main.bicep into the EXISTING resource group '$ResourceGroup'"
+# ── First run or repeat run ────────────────────────────────────────────────────────────
+Write-FcHeading 'Target state'
+
+$groupExists = [bool](az group exists --name $ResourceGroup 2>$null | ConvertFrom-Json)
+
+if ($groupExists) {
+    Write-FcPass "$ResourceGroup exists — REPEAT deployment"
+    $summary = "deploy infra/subscription.bicep into the EXISTING resource group '$ResourceGroup'"
 } else {
-    "CREATE resource group '$ResourceGroup' in $Location, then deploy infra/main.bicep into it"
+    Write-FcPass "$ResourceGroup does not exist — FIRST deployment"
+    Write-FcNote "The deployment will create it in $Location, tagged application=fc-telecom and"
+    Write-FcNote "environment=$Environment."
+    $summary = "CREATE resource group '$ResourceGroup' in $Location and deploy infra/subscription.bicep into it"
 }
 
 Confirm-FcMutation -ResourceGroup $ResourceGroup -Summary $summary -Force:$Force
 
-# ── Resource group ─────────────────────────────────────────────────────────────────────
-Write-FcHeading 'Resource group'
+# ── Template and parameters ────────────────────────────────────────────────────────────
+#
+# Compiled on this host. `az` receives ARM JSON and never needs a Bicep binary of its own,
+# which under the containerised Azure CLI on Ubuntu 26.04 it does not reliably have.
+Write-FcHeading 'Template'
 
-if ($exists) {
-    Write-FcPass "$ResourceGroup already exists"
-} else {
-    az group create --name $ResourceGroup --location $Location `
-        --tags "application=fc-telecom" "environment=$Environment" "managed-by=validation-runbook" `
-        -o none
-    if ($LASTEXITCODE -ne 0) { throw "Failed to create resource group." }
-    Write-FcPass "created $ResourceGroup in $Location"
-    Write-FcNote 'Tagged so 99-Cleanup.ps1 can identify what it is safe to remove.'
-}
+$template  = Build-FcTemplate -BicepFile 'infra/subscription.bicep' `
+                             -OutFile (Join-Path $results "subscription-$Environment.json")
+
+# infra/main.<env>.bicepparam is READ, never rewritten. It holds the Entra group object IDs
+# someone filled in on this host, and it stays the only file anyone edits.
+$paramFile = "infra/main.$Environment.bicepparam"
+$fromBicep = Read-FcBicepParam -Path $paramFile
+Write-FcPass "read $paramFile ($($fromBicep.Count) parameter(s))"
+
+$effectiveLocation = $Location
+if ($fromBicep.Contains('location') -and $fromBicep['location']) { $effectiveLocation = $fromBicep['location'] }
 
 # ── Budget ─────────────────────────────────────────────────────────────────────────────
 Write-FcHeading 'Cost alerting'
@@ -65,69 +93,76 @@ Write-FcNote 'Reaching the amount sends email. It does not stop billing, throttl
 Write-FcNote 'or deallocate resources. Spend continues until someone acts on the alert.'
 Write-FcNote 'The only hard control is deleting the resource group — 99-Cleanup.ps1.'
 
-if (-not $BudgetAlertEmail) {
-    Write-FcWarn 'No -BudgetAlertEmail supplied; skipping budget creation.'
+$budgetName = "budget-$ResourceGroup"
+$emails     = @()
+
+if ($BudgetAlertEmail) {
+    $emails = @($BudgetAlertEmail)
+    Write-FcPass "budget '$budgetName': `$$MonthlyBudgetUsd/month, alerts to $BudgetAlertEmail"
+    Write-FcNote 'Scoped to this resource group only — the subscription contains unrelated'
+    Write-FcNote 'resources, and an alert that fires on someone else spend gets ignored.'
+} else {
+    Write-FcWarn 'No -BudgetAlertEmail supplied; the budget resource is skipped.'
     Write-FcNote 'Set one anyway. A dev App Service plan, SQL database and Log Analytics'
     Write-FcNote 'workspace left running costs real money quietly, and an alert nobody'
     Write-FcNote 'configured is the reason people discover that at month end.'
-} else {
-    $budgetName = "budget-$ResourceGroup"
-    $startDate  = (Get-Date -Day 1).ToString('yyyy-MM-01')
-    $endDate    = (Get-Date -Day 1).AddYears(2).ToString('yyyy-MM-01')
-
-    $existingBudget = az consumption budget list --query "[?name=='$budgetName'] | length(@)" -o tsv 2>$null
-
-    if ($existingBudget -and [int]$existingBudget -gt 0) {
-        Write-FcPass "budget '$budgetName' already exists"
-    } else {
-        # az consumption budget create-with-rg is preview and its surface has moved around;
-        # if it fails, say so plainly rather than pretending a cost guard exists.
-        az consumption budget create-with-rg `
-            --budget-name $budgetName `
-            --resource-group $ResourceGroup `
-            --amount $MonthlyBudgetUsd `
-            --category Cost `
-            --time-grain Monthly `
-            --start-date $startDate `
-            --end-date $endDate `
-            --contact-emails $BudgetAlertEmail `
-            -o none 2>$null
-
-        if ($LASTEXITCODE -eq 0) {
-            Write-FcPass "budget '$budgetName' created: `$$MonthlyBudgetUsd/month, alerts to $BudgetAlertEmail"
-        } else {
-            Write-FcWarn 'Budget creation failed (the consumption CLI extension is preview).'
-            Write-FcNote 'Create it in the portal: Cost Management > Budgets > Add. Do not skip this.'
-        }
-    }
 }
+
+# Azure rejects a change to an existing budget's startDate, so an existing one is read back
+# rather than recomputed. Without this a deployment succeeds in the month the budget was
+# created and fails in every month after it.
+$budgetWindow = Get-FcBudgetWindow -ResourceGroup $ResourceGroup -BudgetName $budgetName
+if ($budgetWindow.Reused) {
+    Write-FcPass "reusing the existing budget start date $($budgetWindow.StartDate)"
+    Write-FcNote 'Azure rejects a change to startDate on an existing budget.'
+} else {
+    Write-FcNote "budget window $($budgetWindow.StartDate) to $($budgetWindow.EndDate)"
+}
+
+$values = @{
+    environmentName            = $fromBicep['environmentName']
+    location                   = $effectiveLocation
+    resourceGroupName          = $ResourceGroup
+    keyVaultAdminGroupObjectId = $fromBicep['keyVaultAdminGroupObjectId']
+    sqlAdminGroupObjectId      = $fromBicep['sqlAdminGroupObjectId']
+    sqlAdminGroupName          = $fromBicep['sqlAdminGroupName']
+    monthlyBudgetUsd           = $MonthlyBudgetUsd
+    budgetAlertEmails          = $emails
+    budgetStartDate            = $budgetWindow.StartDate
+    budgetEndDate              = $budgetWindow.EndDate
+}
+
+$parameters = New-FcParameterFile -Values $values -OutFile (Join-Path $results "parameters-$Environment.json")
 
 # ── Deploy ─────────────────────────────────────────────────────────────────────────────
 Write-FcHeading 'Deployment'
 
 $deploymentName = "fctelecom-$Environment-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
-Write-FcNote "name: $deploymentName"
+Write-FcNote "name: $deploymentName (subscription scope, location $Location)"
 
-az deployment group create `
-    --resource-group $ResourceGroup `
+az deployment sub create `
+    --location $Location `
     --name $deploymentName `
-    --template-file infra/main.bicep `
-    --parameters "infra/main.$Environment.bicepparam" `
+    --template-file $template `
+    --parameters "@$parameters" `
     -o none
 
-if ($LASTEXITCODE -ne 0) { throw "Deployment failed. Check: az deployment group show -g $ResourceGroup -n $deploymentName" }
+if ($LASTEXITCODE -ne 0) { throw "Deployment failed. Check: az deployment sub show -n $deploymentName" }
 Write-FcPass 'deployment succeeded'
+
+if (-not $groupExists) {
+    Write-FcPass "$ResourceGroup created by the deployment"
+}
 
 # ── Outputs ────────────────────────────────────────────────────────────────────────────
 Write-FcHeading 'Deployment outputs'
 
-$outputs = Get-FcDeploymentOutputs -ResourceGroup $ResourceGroup -DeploymentName $deploymentName
+$outputs = Get-FcDeploymentOutputs -SubscriptionScope -DeploymentName $deploymentName
 
 foreach ($property in $outputs.PSObject.Properties) {
     Write-Host ('  {0,-22} {1}' -f $property.Name, $property.Value)
 }
 
-$results = New-FcResultsDirectory
 $outputFile = Join-Path $results "outputs-$Environment.json"
 $outputs | ConvertTo-Json -Depth 5 | Out-File -FilePath $outputFile -Encoding utf8
 

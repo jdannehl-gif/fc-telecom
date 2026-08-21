@@ -31,11 +31,32 @@
     stop. Second, the destructive changes that actually can occur here are property-level: a
     property being removed, or an immutable property changing, inside a `Modify`. Those are
     what this script surfaces for review.
+
+    SECOND CORRECTION — SUBSCRIPTION SCOPE.
+
+    The first real validation run against Ubuntu 26.04 failed here with:
+
+      ResourceGroupNotFound: Resource group 'rg-fctelecom-dev' could not be found
+
+    This script previewed a RESOURCE-GROUP-scoped deployment into a group that the next step,
+    02-DeployInfra.ps1, was going to create. On a first deployment the group does not exist, so
+    the gate could not pass — on precisely the run where a preview matters most, because
+    nothing has ever been reviewed before.
+
+    (The `The content for this response was already consumed` traceback that followed is Azure
+    CLI 2.89.1 mishandling its own error response. It is noise on top of the real failure, not
+    a second problem.)
+
+    The fix is not to create the group first so the preview has something to point at. That
+    would move a mutation ahead of the gate that exists to approve mutations. It is to preview
+    at SUBSCRIPTION scope, against infra/subscription.bicep, so that creating the resource
+    group is one of the changes shown.
 #>
 [CmdletBinding()]
 param(
     [ValidateSet('dev', 'prod')][string]$Environment = 'dev',
     [Parameter(Mandatory)][string]$ResourceGroup,
+    [string]$Location = 'eastus2',
 
     # Set once the destructive modifications listed by a previous run have been read and
     # accepted. Deliberately not a switch you would set by habit.
@@ -52,19 +73,84 @@ Show-FcContext -Operation 'Infrastructure what-if (read-only)' `
 $results = New-FcResultsDirectory
 $outFile = Join-Path $results "whatif-$Environment.json"
 
-Write-FcHeading 'Running what-if'
-Write-FcNote 'ResultFormat = FullResourcePayloads (property-level detail).'
+# ── First run or repeat run ────────────────────────────────────────────────────────────
+#
+# Stated up front, because it changes what the output below should look like and therefore
+# what "clean" means. A first run is all Create and no Modify; anything else is worth a
+# second look before it is approved.
+Write-FcHeading 'Target state'
 
-$raw = az deployment group what-if `
-    --resource-group $ResourceGroup `
-    --template-file infra/main.bicep `
-    --parameters "infra/main.$Environment.bicepparam" `
+$groupExists = [bool](az group exists --name $ResourceGroup 2>$null | ConvertFrom-Json)
+if ($groupExists) {
+    Write-FcPass "$ResourceGroup exists — this is a REPEAT deployment"
+    Write-FcNote 'Expect Ignore/NoChange for most resources, and read every Modify.'
+} else {
+    Write-FcPass "$ResourceGroup does not exist — this is a FIRST deployment"
+    Write-FcNote 'The preview below INCLUDES creating the resource group. Expect all Create,'
+    Write-FcNote 'no Modify and no Delete.'
+}
+
+# ── Compile ────────────────────────────────────────────────────────────────────────────
+#
+# On this host, to JSON. `az` is then handed a plain ARM template and never needs a Bicep
+# binary of its own — which under the containerised CLI it does not reliably have. See
+# Build-FcTemplate in FcValidation.psm1.
+Write-FcHeading 'Template'
+
+$template   = Build-FcTemplate -BicepFile 'infra/subscription.bicep' `
+                              -OutFile (Join-Path $results "subscription-$Environment.json")
+
+# The operator's own infra/main.<env>.bicepparam is the source of the tenant-specific values
+# and is READ, never rewritten. See Read-FcBicepParam.
+$paramFile  = "infra/main.$Environment.bicepparam"
+$fromBicep  = Read-FcBicepParam -Path $paramFile
+Write-FcPass "read $paramFile ($($fromBicep.Count) parameter(s))"
+
+$budgetName   = "budget-$ResourceGroup"
+$budgetWindow = Get-FcBudgetWindow -ResourceGroup $ResourceGroup -BudgetName $budgetName
+
+# Precomputed rather than inlined: an `if` is a statement, and a statement inside a hashtable
+# literal does not parse.
+$effectiveLocation = $Location
+if ($fromBicep.Contains('location') -and $fromBicep['location']) { $effectiveLocation = $fromBicep['location'] }
+
+$values = @{
+    environmentName            = $fromBicep['environmentName']
+    location                   = $effectiveLocation
+    resourceGroupName          = $ResourceGroup
+    keyVaultAdminGroupObjectId = $fromBicep['keyVaultAdminGroupObjectId']
+    sqlAdminGroupObjectId      = $fromBicep['sqlAdminGroupObjectId']
+    sqlAdminGroupName          = $fromBicep['sqlAdminGroupName']
+    budgetStartDate            = $budgetWindow.StartDate
+    budgetEndDate              = $budgetWindow.EndDate
+    budgetAlertEmails          = @()
+}
+
+$parameters = New-FcParameterFile -Values $values -OutFile (Join-Path $results "parameters-$Environment.json")
+Write-FcPass "wrote $parameters"
+Write-FcNote 'budgetAlertEmails is empty here: a preview does not need recipients, and'
+Write-FcNote '02-DeployInfra.ps1 supplies them from -BudgetAlertEmail.'
+
+# ── What-if ────────────────────────────────────────────────────────────────────────────
+Write-FcHeading 'Running what-if'
+Write-FcNote 'Scope = subscription. ResultFormat = FullResourcePayloads (property-level detail).'
+
+$raw = az deployment sub what-if `
+    --location $Location `
+    --template-file $template `
+    --parameters "@$parameters" `
     --result-format FullResourcePayloads `
     --no-pretty-print 2>&1
 
 if ($LASTEXITCODE -ne 0) {
     Write-FcFail 'what-if itself failed:'
     $raw | Write-Host
+    if (($raw -join ' ') -match 'ResourceGroupNotFound') {
+        Write-FcNote ''
+        Write-FcNote 'ResourceGroupNotFound at SUBSCRIPTION scope should not happen — creating the'
+        Write-FcNote 'group is part of this template. If you see it, something is still invoking a'
+        Write-FcNote 'resource-group-scoped what-if. Check that $template above is subscription.bicep.'
+    }
     exit 1
 }
 
@@ -100,7 +186,18 @@ if ($deletes.Count -eq 0) {
 }
 
 # ── Deploy: missing information, not danger ────────────────────────────────────────────
-$deploys = @($changes | Where-Object changeType -eq 'Deploy')
+#
+# At subscription scope the template contains two Microsoft.Resources/deployments resources —
+# the nested modules for the infrastructure and the budget. what-if reports those as `Deploy`
+# because a nested deployment has no properties of its own to diff, not because anything about
+# them is indeterminate. Flagging the module wrappers would fail every single run and train
+# people to pass -AcknowledgeDestructiveModifications by habit, which is how a real finding
+# gets waved through. The resources INSIDE them are expanded and reported separately, and
+# those are what the checks below read.
+$deploys = @($changes |
+    Where-Object changeType -eq 'Deploy' |
+    Where-Object { $_.resourceId -notmatch '/providers/Microsoft\.Resources/deployments/' })
+
 if ($deploys.Count -gt 0) {
     Write-FcHeading 'Indeterminate changes'
     Write-FcWarn "$($deploys.Count) resource(s) returned changeType 'Deploy'."
@@ -130,14 +227,28 @@ function Get-FlattenedDelta {
     param($Delta, [string]$Prefix = '')
     foreach ($entry in @($Delta)) {
         if (-not $entry) { continue }
-        $path = if ($Prefix) { "$Prefix.$($entry.path)" } else { $entry.path }
+
+        # Every field read through PSObject.Properties, not directly.
+        #
+        # Under `Set-StrictMode -Version Latest`, reading a property that is absent THROWS. ARM
+        # omits `before`/`after` on any delta node that has `children` — which is every nested
+        # property change, the common case — so `$entry.before` terminated the script partway
+        # through the destructive-change review. A safety gate that crashes is worse than one
+        # that reports nothing, because the crash arrives after "Property modifications" has
+        # already printed and reads like the section finished.
+        $names  = $entry.PSObject.Properties.Name
+        $path   = if ($Prefix) { "$Prefix.$($entry.path)" } else { $entry.path }
+        $kind   = if ($names -contains 'propertyChangeType') { $entry.propertyChangeType } else { 'Unknown' }
+        $before = if ($names -contains 'before') { $entry.before } else { $null }
+        $after  = if ($names -contains 'after')  { $entry.after }  else { $null }
+
         [pscustomobject]@{
             Path   = $path
-            Kind   = $entry.propertyChangeType
-            Before = $entry.before
-            After  = $entry.after
+            Kind   = $kind
+            Before = $before
+            After  = $after
         }
-        if ($entry.PSObject.Properties.Name -contains 'children' -and $entry.children) {
+        if ($names -contains 'children' -and $entry.children) {
             Get-FlattenedDelta -Delta $entry.children -Prefix $path
         }
     }
@@ -205,6 +316,9 @@ if ($modifies.Count -eq 0) {
 Write-Host ''
 if ($failures -eq 0) {
     Write-Host 'what-if reviewed: no unexplained destructive changes.' -ForegroundColor Green
+    if (-not $groupExists) {
+        Write-Host "The preview above includes CREATING $ResourceGroup in $Location." -ForegroundColor Cyan
+    }
     Write-Host "Next: ./scripts/validate/02-DeployInfra.ps1 -Environment $Environment -ResourceGroup $ResourceGroup"
     exit 0
 }

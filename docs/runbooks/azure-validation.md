@@ -18,7 +18,7 @@ Compilation and testing pass in CI. This is the third condition.
 | 0 | Prerequisites, validation host, licensing | `scripts/bootstrap/ubuntu-26.04.sh` | the host only |
 | 1 | Entra Part A — role groups and app registration | `entra-setup-dev.md` §A | Entra |
 | 2 | Preflight | `00-Preflight.ps1` | no |
-| 3 | Infrastructure what-if and deploy | `01`, `02` | **Azure** |
+| 3 | Infrastructure what-if and deploy — **creates the resource group** | `01`, `02` | **Azure** |
 | 4 | Entra Part B — URLs and client secret | `entra-setup-dev.md` §B | Entra, App Service |
 | 5 | **Field-encryption keys** | `03-SetEncryptionKeys.ps1` | Key Vault, App Service |
 | 6 | Database — review, apply, grant principals | `04`, `05` | **SQL** |
@@ -38,6 +38,11 @@ Compilation and testing pass in CI. This is the third condition.
 **Groups before infrastructure (1 before 3).** `infra/main.dev.bicepparam` takes Entra group
 object IDs. Preflight refuses to continue if they do not resolve, so the groups must exist
 first.
+
+**Nothing creates the resource group before step 3.** Step 3 previews and deploys at
+subscription scope, so creating `rg-fctelecom-dev` is part of the change that gets reviewed
+rather than a precondition arranged beforehand. Running `az group create` by hand first is not
+a shortcut — it puts a mutation in front of the gate that exists to approve mutations.
 
 **Keys before the application starts (5 before 7).** Not a preference — a hard dependency, and
 the reason this runbook was reordered. `Program.cs` resolves `DemoDataSeeder` at startup to run
@@ -239,22 +244,77 @@ then nobody can read the vault and nobody can administer the database.
 
 ## Step 3 — Infrastructure
 
+**This is the first-deployment command.** Both lines are safe to run when nothing exists yet:
+
 ```powershell
-./scripts/validate/01-InfraWhatIf.ps1 -Environment dev -ResourceGroup rg-fctelecom-dev
+./scripts/validate/01-InfraWhatIf.ps1 -Environment dev -ResourceGroup rg-fctelecom-dev `
+    -Location eastus2
 
 ./scripts/validate/02-DeployInfra.ps1 -Environment dev -ResourceGroup rg-fctelecom-dev `
     -Location eastus2 -MonthlyBudgetUsd 150 -BudgetAlertEmail you@example.org
 ```
 
-Creates the resource group (tagged so cleanup can identify it), sets a budget, deploys, and
-writes `artifacts/validation/outputs-dev.json`. **Every later script reads that file** —
-`infra/main.bicep` appends a `uniqueString()` suffix, so no resource name can be derived.
+### The resource group is created by the deployment
+
+Both scripts target **`infra/subscription.bicep` at subscription scope**. That template creates
+`rg-fctelecom-dev` in `eastus2`, tags it `application=fc-telecom` and `environment=dev`, and
+deploys `infra/main.bicep` into it as a module.
+
+This is the fix for a defect the first real 26.04 run exposed. The what-if used to preview a
+**resource-group-scoped** deployment into a group that step 3's second line was going to create,
+so the first run answered:
+
+```
+ResourceGroupNotFound: Resource group 'rg-fctelecom-dev' could not be found
+```
+
+(The `The content for this response was already consumed` traceback after it is Azure CLI 2.89.1
+mishandling its own error. Noise on top of the real failure, not a second problem.)
+
+The obvious repair — create the group first, then preview — would have moved a mutation ahead of
+the gate whose entire job is to approve mutations. Previewing at subscription scope instead means
+**creating the resource group is one of the changes you review**, which is what you want on a run
+where nothing has been reviewed before. Both scripts print `FIRST deployment` or `REPEAT
+deployment` before doing anything, so you know which shape of output to expect.
+
+### Your `main.dev.bicepparam` is read, never rewritten
+
+There is **no** `subscription.dev.bicepparam`. The Entra group object IDs you filled in on this
+host live in `infra/main.dev.bicepparam` and nowhere else; the scripts read that file and
+generate `artifacts/validation/parameters-dev.json` from it for the subscription-scope
+deployment. Pulling a new version of this repository replaces tracked files, and
+`main.dev.bicepparam` is tracked with placeholder zeros — so before you update:
+
+```bash
+cp infra/main.dev.bicepparam ~/main.dev.bicepparam.local     # keep your object IDs
+git pull
+cp ~/main.dev.bicepparam.local infra/main.dev.bicepparam     # put them back
+git status --short infra/                                    # expect the file to show modified
+```
+
+`Test-DeploymentSequencing.ps1` asserts the scripts never write to that file, so a future change
+cannot start clobbering it silently.
+
+### The budget covers this resource group only
+
+The budget is deployed **inside `rg-fctelecom-dev`**, with an explicit `ResourceGroupName`
+filter. This subscription also contains an unrelated Cognitive Services account used by
+Capture/CapturePreBuilt; a subscription-scope budget would alert on that spend as if it were
+ours, which is worse than no alert because it teaches people to ignore the email.
+
+An existing budget's start date is read back and reused rather than recomputed — Azure rejects a
+change to `startDate` on a budget that already exists, which would otherwise make every
+deployment fail from the following month onwards.
 
 > **The budget is an alert, not a cap.** Reaching the amount sends email. Azure does not stop
 > billing, throttle anything, or deallocate resources. Spend continues until a human acts. The
 > only hard control is deleting the resource group (step 16).
 
+Step 3 writes `artifacts/validation/outputs-dev.json`. **Every later script reads that file** —
+`infra/main.bicep` appends a `uniqueString()` suffix, so no resource name can be derived.
+
 - [ ] what-if reviewed, no unexplained destructive modifications
+- [ ] The preview showed the resource group being created (first run only)
 - [ ] Deployment succeeded, `outputs-dev.json` written
 - [ ] Budget created, alert address monitored by someone
 

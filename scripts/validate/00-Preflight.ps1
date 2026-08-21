@@ -382,18 +382,23 @@ Write-FcHeading 'Bicep'
 # Compile to a temp file rather than --stdout, so the only thing captured is diagnostics.
 # And the diagnostics ARE captured: the previous version swallowed stderr with 2>$null and
 # reported a bare "does not compile", which is the least useful possible way to say it.
-$bicepOut = Join-Path ([System.IO.Path]::GetTempPath()) 'fc-main.json'
+#
+# subscription.bicep, not main.bicep. It is the entry point the deployment actually uses, and
+# it consumes main.bicep as a module — so compiling it covers both, and it is the one whose
+# breakage would stop step 3.
+$bicepOut  = Join-Path ([System.IO.Path]::GetTempPath()) 'fc-subscription.json'
+$bicepFile = 'infra/subscription.bicep'
 
 if (Get-Command bicep -ErrorAction SilentlyContinue) {
     # The standalone CLI takes the path POSITIONALLY. `--file` is Azure CLI syntax
     # (`az bicep build --file X`); the standalone binary rejects it. Getting this wrong is
     # how this check first reported "does not compile" for a template that compiles fine in
     # `validate-infrastructure` — a false alarm on the tool, blamed on the template.
-    $bicepLog  = & bicep build infra/main.bicep --outfile $bicepOut 2>&1
+    $bicepLog  = & bicep build $bicepFile --outfile $bicepOut 2>&1
     $bicepExit = $LASTEXITCODE
     $bicepVia  = 'bicep'
 } elseif ($azOk) {
-    $bicepLog  = & az bicep build --file infra/main.bicep --outfile $bicepOut 2>&1
+    $bicepLog  = & az bicep build --file $bicepFile --outfile $bicepOut 2>&1
     $bicepExit = $LASTEXITCODE
     $bicepVia  = 'az bicep'
 } else {
@@ -405,12 +410,13 @@ if (Get-Command bicep -ErrorAction SilentlyContinue) {
 if ($null -eq $bicepExit) {
     Fail 'no Bicep available — install the standalone binary or run az bicep install'
 } elseif ($bicepExit -eq 0) {
-    Write-FcPass "infra/main.bicep compiles (via $bicepVia)"
+    Write-FcPass "$bicepFile compiles (via $bicepVia)"
+    Write-FcNote 'It consumes infra/main.bicep as a module, so this covers both.'
     foreach ($line in @(@($bicepLog) | Where-Object { $_ -match 'Warning' } | Select-Object -First 10)) {
         Write-FcNote ($line -replace '\s+$', '')
     }
 } else {
-    Fail "infra/main.bicep does not compile (via $bicepVia, exit $bicepExit)"
+    Fail "$bicepFile does not compile (via $bicepVia, exit $bicepExit)"
     foreach ($line in @(@($bicepLog) | Select-Object -First 20)) {
         Write-FcNote ($line -replace '\s+$', '')
     }
