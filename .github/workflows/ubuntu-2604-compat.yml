@@ -252,47 +252,29 @@ jobs:
       - name: Linux compatibility audit
         run: pwsh -NoProfile -File scripts/validate/Test-LinuxCompatibility.ps1 -IncludeAdvisory
 
-      # The first-deployment path. This is the one that cannot be checked by re-running the
-      # real pass: once rg-fctelecom-dev exists, the state where it does not is gone, and that
-      # is the state that produced ResourceGroupNotFound. Azure is not called — `az` is
-      # replaced with a recorded test double — so this runs on every push.
-      - name: Deployment sequencing (first run and repeat run)
+      # The first-deployment path, and the template assertions that go with it.
+      #
+      # This is the check that cannot be made by re-running the real pass: once
+      # rg-fctelecom-dev exists, the state where it does not is gone, and that is the state
+      # that produced ResourceGroupNotFound. Azure is not called — `az` is replaced with a
+      # recorded test double — so it runs on every push.
+      #
+      # Its first six assertions compile infra/subscription.bicep for real and check the
+      # artefact: subscription deployment schema, exactly one resource group, the
+      # application=fc-telecom and environment tags, main.bicep scoped as a module to that
+      # group, and the budget's ResourceGroupName filter.
+      #
+      # There WAS a second step here repeating those four checks in shell and Python, as
+      # belt and braces. It is gone, for two reasons. A bare ubuntu:26.04 image has no
+      # python3 and the bootstrap does not install one, so it failed with exit 127 — and
+      # adding python3 to a validation host that has no other use for it is the wrong fix.
+      # More to the point, scripts/validate/README.md already argues that two
+      # implementations of the same check drift and the one you are not running is the one
+      # that is wrong. That applies here too.
+      - name: Deployment sequencing and template scope
         run: |
           export PATH="$PATH:$HOME/.dotnet/tools"
           pwsh -NoProfile -File scripts/validate/Test-DeploymentSequencing.ps1
-
-      # Belt and braces on the same defect, at the level of the compiled artefact rather than
-      # the script. A resource-group-scoped template physically cannot create its own group,
-      # so if this schema ever changes back, step 3 breaks again on a first run only.
-      - name: Assert the deployment entry point is subscription-scoped
-        run: |
-          bicep build infra/subscription.bicep --outfile /tmp/subscription.json
-          schema=$(python3 -c "import json;print(json.load(open('/tmp/subscription.json'))['\$schema'])")
-          echo "schema: $schema"
-          case "$schema" in
-            *subscriptionDeploymentTemplate*) echo "ok: subscription scope" ;;
-            *) echo "::error::infra/subscription.bicep compiled to '$schema', not a subscription template."
-               exit 1 ;;
-          esac
-          python3 - <<'PY'
-          import json, sys
-          t = json.load(open('/tmp/subscription.json'))
-          groups = [r for r in t['resources'] if r['type'] == 'Microsoft.Resources/resourceGroups']
-          if len(groups) != 1:
-              print(f"::error::expected exactly one resource group resource, found {len(groups)}")
-              sys.exit(1)
-          tags = t['variables'][groups[0]['tags'].strip('[]').split("'")[1]]
-          if tags.get('application') != 'fc-telecom':
-              print(f"::error::application tag is {tags.get('application')!r}, expected 'fc-telecom'")
-              sys.exit(1)
-          if 'Microsoft.Consumption/budgets' not in json.dumps(t):
-              print("::error::no budget in the template")
-              sys.exit(1)
-          if 'ResourceGroupName' not in json.dumps(t):
-              print("::error::the budget has no ResourceGroupName filter")
-              sys.exit(1)
-          print("ok: resource group tagged application=fc-telecom, budget filtered to it")
-          PY
 
       # The point of the whole job: the real preflight script, running its real checks, on a
       # real 26.04 host, minus the parts that need a subscription.
