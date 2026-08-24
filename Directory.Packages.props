@@ -82,8 +82,8 @@
       jump is not something to make blind while the build has never compiled. Moving to
       4.x is worth doing once CI is green and the change can actually be verified.
     -->
-    <PackageVersion Include="Microsoft.Identity.Web" Version="3.8.2" />
-    <PackageVersion Include="Microsoft.Identity.Web.UI" Version="3.8.2" />
+    <PackageVersion Include="Microsoft.Identity.Web" Version="3.15.1" />
+    <PackageVersion Include="Microsoft.Identity.Web.UI" Version="3.15.1" />
     <PackageVersion Include="Microsoft.AspNetCore.Components.QuickGrid" Version="10.0.11" />
   </ItemGroup>
 
@@ -98,8 +98,8 @@
       version floors is what caused the failure, and 1.21.0 carries no advisories.
     -->
     <PackageVersion Include="Azure.Identity" Version="1.21.0" />
-    <PackageVersion Include="Azure.Storage.Blobs" Version="12.23.0" />
-    <PackageVersion Include="Azure.Security.KeyVault.Secrets" Version="4.7.0" />
+    <PackageVersion Include="Azure.Storage.Blobs" Version="12.29.1" />
+    <PackageVersion Include="Azure.Security.KeyVault.Secrets" Version="4.11.0" />
   </ItemGroup>
 
   <ItemGroup Label="Cross-cutting">
